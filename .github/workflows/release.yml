@@ -130,7 +130,9 @@ jobs:
             on && /^## \[/ { exit }
             on { print }
           ' "changelog/$unit.md" >> notes.md
-          if [[ "$unit" == mvm ]]; then
+          # Install and Upgrade sections only once the package managers are
+          # switched on (repo variable PUBLISH_PACKAGES, implementation plan 0.3b).
+          if [[ "$unit" == mvm && "${{ vars.PUBLISH_PACKAGES }}" == true ]]; then
             cat packaging/install-notes.md >> notes.md
           fi
           if [[ "$unit" == firmware ]]; then
@@ -181,10 +183,11 @@ jobs:
             --notes-file notes.md "${flags[@]}"
 
   # Homebrew, apt, and winget (implementation plan 0.3b), after the release
-  # exists so their download URLs resolve.
+  # exists so their download URLs resolve. Off until the repo variable
+  # PUBLISH_PACKAGES is true.
   packages:
     needs: [meta, publish]
-    if: needs.meta.outputs.unit == 'mvm'
+    if: needs.meta.outputs.unit == 'mvm' && vars.PUBLISH_PACKAGES == 'true'
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.meta.outputs.version }}
