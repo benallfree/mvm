@@ -4,6 +4,7 @@ description = "The ESP32-S3 kernel image. A stub until 0.4."
 version = "0.0.1"
 edition = "2024"
 publish = false
+license = "MIT"
 
 [dependencies]
 esp-hal = { version = "1.2.2", features = ["esp32s3"] }

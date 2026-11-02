@@ -4,6 +4,7 @@ description = "The applet SDK."
 version = "0.0.0"
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [lints]
 workspace = true

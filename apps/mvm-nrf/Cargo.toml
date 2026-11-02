@@ -4,6 +4,7 @@ description = "The nRF52840 kernel image. A stub until 0.4."
 version = "0.0.1"
 edition = "2024"
 publish = false
+license = "MIT"
 
 [dependencies]
 cortex-m-rt = "0.7.7"
