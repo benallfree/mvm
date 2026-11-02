@@ -29,6 +29,18 @@ Each entry says what the idea is, why it was deferred, and what v1 does instead.
   - Deferred: there are two paths to support, and a slightly different compiler gives different bytes and a different install id.
   - v1 instead: Docker only.
 
+## Languages
+
+- **C++ and Zig applets.**
+  - Idea: `mesh new --lang cpp` and `--lang zig`. C++ uses the image's clang and C library with exceptions and RTTI off; Zig targets `riscv32` freestanding, takes the SDK's linker script, and imports the C headers with `@cImport`. Both add only a template and, for Zig, one binary in the applet image.
+  - Deferred: v1 proves the SDK with Rust and C first.
+  - v1 instead: Rust and C. Languages that compile to C (Nim, for example) can already go through the C SDK.
+
+- **Interpreter applets.**
+  - Idea: An applet that embeds an interpreter (Lua, MicroPython, or a small JavaScript such as Elk or QuickJS) and runs scripts from files, so applets can be written with no compiler. TinyGo, with its garbage collector and goroutines mapped onto callbacks, is a related larger port.
+  - Deferred: Lua and MicroPython raise errors with `setjmp`/`longjmp`, which v1's C runtime does not support, so that comes first.
+  - v1 instead: compiled applets only.
+
 ## Distribution
 
 - **Epidemic applet distribution and automatic upgrades.**

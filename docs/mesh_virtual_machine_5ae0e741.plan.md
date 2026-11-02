@@ -106,12 +106,13 @@ mvm/
   tests/guards/
   scenarios/
   xtask/
+  docker/
   fuzz/mvm-mem/
   profiles/
   changelog/
 ```
 
-`applets/tests/` holds the purpose-built test applets, `tests/guards/` the drift-guard tests, `scenarios/` the `mesh run` scenarios, `xtask/` the repo tooling (`cargo xtask bench`, `cargo xtask guards`, `cargo xtask release`), and `changelog/` the changelogs of the `kernel`, `sdk`, and `mesh` release units (see Releases).
+`applets/tests/` holds the purpose-built test applets, `tests/guards/` the drift-guard tests, `scenarios/` the `mesh run` scenarios, `xtask/` the repo tooling (`cargo xtask bench`, `cargo xtask guards`, `cargo xtask release`), `docker/` the firmware and applet build images, and `changelog/` the changelogs of the `kernel`, `sdk`, and `mesh` release units (see Releases).
 
 Kernel firmware is built in its own pinned firmware build image, like applets are built in the applet image: Espressif's Rust toolchain for the ESP32-S3's Xtensa cores next to stable Rust for nRF52840, so every machine and CI builds identical kernels. Flashing runs on the host with pinned `espflash` and `probe-rs`, because containers on macOS cannot reach USB devices.
 
@@ -123,14 +124,16 @@ Each release unit has its own semver version, its own changelog, and its own tag
 
 | Unit | Contents | Changelog | Each release states |
 | --- | --- | --- | --- |
-| `kernel` | Both firmware images (with the embedded `boot.mhc`) and the board presets | `changelog/kernel.md` | The ABI version it implements |
-| `sdk` | `mvm-abi`, `mvm-sdk`, `mvm-packer`, and the applet build image | `changelog/sdk.md` | The ABI version it targets |
+| `kernel` | Both firmware images (with the embedded `boot.mhc`) and the board presets | `changelog/kernel.md` | The ABI version it implements and the `firmware-image` version it was built with |
+| `sdk` | `mvm-abi`, the Rust and C SDKs (`mvm-sdk` and the C runtime), `mvm-packer`, and the applet build image, pushed to Docker Hub as `benallfree/mvm-sdk:<version>` | `changelog/sdk.md`, with Rust and C sections | The ABI version it targets |
+| `firmware-image` | The kernel firmware build image, pushed to Docker Hub as `benallfree/mvm-firmware:<version>` | `changelog/firmware-image.md` | Its multi-arch digest and its pinned tool versions (`docker/firmware/versions`) |
 | `mesh` | The CLI for macOS, Linux, and Windows | `changelog/mesh.md` | |
 | Each shipped applet (`frisbee`, `stats`, `extra-fs`, `sd`, `fat`, the `lora-modem-*` applets) | Its `.mhc` | `applets/<name>/CHANGELOG.md` | Its `min_abi`, and a kernel version when it needs a kernel fix (advice only) |
 
 - The ABI version is `mvm-abi`'s version (see `crates/mvm-abi`). It has no release of its own: an ABI change ships in an `sdk` release and in the `kernel` release that implements it. Applets depend on the ABI, never on a kernel version, and find features with `sys.has`.
 - `applets/boot` ships inside each kernel release with the kernel's version. `applets/tests` never ships.
 - Versions follow semver: major for a break in what users, applets, or other nodes rely on (an applet's settings, the names it registers, its wire format), minor for additions, patch for fixes. Before 1.0, a break bumps the minor.
+- Images are multi-arch (`linux/arm64` and `linux/amd64`) and are always used by digest, never by tag: `docker/firmware/digest` holds the firmware image's, and `mesh` holds each SDK release's. An image's version follows its effect on what it builds: patch for a rebuild with the same tool versions whose output is byte-identical, minor when any tool version changes, major when the way it is invoked changes.
 - Every change lands with an entry under "Unreleased" in the changelog of each unit it touched. A release, run with `cargo xtask release <unit> <major|minor|patch>`, moves those entries under the new version, commits, and tags; CI builds the unit and publishes the GitHub Release.
 
 ## crates/mvm-abi
@@ -723,8 +726,8 @@ Every command that talks to a node takes `--node <target>`, where the target is 
 
 Details:
 
-- `mesh new` writes `mesh.toml`, the one project file for C and Rust alike. It holds the manifest fields the author chooses: name, version, and optional `min_abi`. `mesh build` reads it and the packer writes it into the manifest. The author maintains only their source files and `mesh.toml`.
-- `mesh build` mounts the project into the pinned `mvm-sdk` build image, compiles to an ELF there, and packs it on the host. It needs Docker (or a compatible runtime) and nothing else. The in-container compile entry point is internal, not a user-facing mode.
+- `mesh new` writes `mesh.toml`, the one project file for C and Rust alike. It holds the manifest fields the author chooses: name, version, and optional `min_abi`, plus `sdk`, the SDK release the applet builds with (`mesh new` writes the current one). `mesh build` reads it and the packer writes the manifest fields into the manifest. The author maintains only their source files and `mesh.toml`.
+- `mesh build` mounts the project into the `mvm-sdk` build image of the project's `sdk` version, run by digest (every `mesh` release carries the digest of every published SDK release, so an applet pinned to an old SDK builds the same with a newer `mesh`), compiles to an ELF there, and packs it on the host. It needs Docker (or a compatible runtime) and nothing else. The in-container compile entry point is internal, not a user-facing mode.
 - `mesh run <scenario>` is a host node runner. It loads board presets and the scenario. Each node gets its own `/boot` with a `config.ini`, and the kernel writes the default `boot.mhc` there on first run and boots from it, the same as on a board. Backends default to simulated hardware in virtual time. A scenario can switch a node to wall-clock time and real links, as the Darwin frisbee player does when it drives a board as a LoRa modem.
 - The file and node commands are wrappers over shell lines. `mesh ls`, `cat`, `mv`, and `rm` are the shell's `ls`, `cat`, `mv`, and `rm`. `mesh cp` from host to node opens a transfer: for each file it sends `put` (whose reply says where to resume) and `append`s base64 chunks with their CRCs, then ends with one `commit`. From node to host it uses `cat`; between two node paths it sends the shell's `cp`, so the data never crosses the link. `mesh cfg` wraps the hardware shell's `cfg get` and `cfg set`. `mesh verify` runs `hash` on each loaded applet's file and compares it with the content hash `ps` reports, taken at load. `mesh ps`, `log`, and `reboot` are the shell commands of the same names. They work the same against a host node's virtual stream.
 - `mesh mount` runs a small WebDAV server on localhost inside `mesh`, bridged to shell commands, and mounts it with the operating system's own WebDAV client: Finder's (`mount_webdav`) on macOS and `net use` on Windows, with no `sudo`, and `davfs2` on Linux, with `sudo`. Locking is in effect off: `LOCK` is always granted, because the macOS and Windows clients mount read-only without it. The bridge drops Finder litter (`.DS_Store`, `._*`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`) so it never reaches flash, and editors' save-by-rename works. A WebDAV `PUT` carries a whole file, and the bridge sends each one through the same `put` and `commit` as `mesh cp`, so in-place edits, truncation, and size changes all become one whole-file replace, and a loaded applet is only ever replaced by a whole file. The mount survives node resets, because WebDAV is stateless HTTP and the bridge reconnects underneath it. It is how a user edits `config.ini`, including pasting a board preset into `[board]`.

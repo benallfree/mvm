@@ -1,0 +1,9 @@
+[build]
+target = "thumbv7em-none-eabihf"
+
+[target.thumbv7em-none-eabihf]
+rustflags = [
+    "-C", "link-arg=-Tlink.x",
+    "--remap-path-prefix=/work=.",
+    "--remap-path-prefix=/usr/local/cargo=/cargo",
+]

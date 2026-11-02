@@ -1,0 +1,19 @@
+[package]
+name = "mvm-nrf"
+description = "The nRF52840 kernel image. A stub until 0.4."
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+cortex-m-rt = "0.7.7"
+panic-halt = "1.0.0"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+
+# Built in the firmware image (0.2a), apart from the host workspace.
+[workspace]

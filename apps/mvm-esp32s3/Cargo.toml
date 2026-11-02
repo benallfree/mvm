@@ -1,0 +1,19 @@
+[package]
+name = "mvm-esp32s3"
+description = "The ESP32-S3 kernel image. A stub until 0.4."
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+esp-hal = { version = "1.2.2", features = ["esp32s3"] }
+esp-bootloader-esp-idf = { version = "0.6.0", features = ["esp32s3"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+
+# Built in the firmware image (0.2a), apart from the host workspace.
+[workspace]

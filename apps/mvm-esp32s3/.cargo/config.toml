@@ -1,0 +1,12 @@
+[build]
+target = "xtensa-esp32s3-none-elf"
+
+[target.xtensa-esp32s3-none-elf]
+rustflags = [
+    "-C", "link-arg=-nostartfiles",
+    "--remap-path-prefix=/work=.",
+    "--remap-path-prefix=/usr/local/cargo=/cargo",
+]
+
+[unstable]
+build-std = ["core"]

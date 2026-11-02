@@ -1,0 +1,4 @@
+# Firmware build image ids, one per platform (implementation plan 0.2a).
+# 0.3 replaces them with the pushed multi-arch digest.
+linux/arm64 sha256:bf594ed8cd2aa96c830065f58e0f27bcdb6d93ffc85ab2c31e65eaf36d149ece
+linux/amd64 sha256:f531d94ad520d911559432393965534b7eb22d68229602a45f6950d7bd69bd23
