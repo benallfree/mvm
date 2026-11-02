@@ -108,13 +108,30 @@ mvm/
   xtask/
   fuzz/mvm-mem/
   profiles/
+  changelog/
 ```
 
-`applets/tests/` holds the purpose-built test applets, `tests/guards/` the drift-guard tests, `scenarios/` the `mesh run` scenarios, and `xtask/` the repo tooling (`cargo xtask bench`, `cargo xtask guards`).
+`applets/tests/` holds the purpose-built test applets, `tests/guards/` the drift-guard tests, `scenarios/` the `mesh run` scenarios, `xtask/` the repo tooling (`cargo xtask bench`, `cargo xtask guards`, `cargo xtask release`), and `changelog/` the changelogs of the `kernel`, `sdk`, and `mesh` release units (see Releases).
 
 Kernel firmware is built in its own pinned firmware build image, like applets are built in the applet image: Espressif's Rust toolchain for the ESP32-S3's Xtensa cores next to stable Rust for nRF52840, so every machine and CI builds identical kernels. Flashing runs on the host with pinned `espflash` and `probe-rs`, because containers on macOS cannot reach USB devices.
 
 An applet never links an MCU HAL. Kernel crates never link applet game logic.
+
+## Releases
+
+Each release unit has its own semver version, its own changelog, and its own tag, `<unit>-vX.Y.Z`, published as a GitHub Release with the artifacts and that version's changelog section as its notes.
+
+| Unit | Contents | Changelog | Each release states |
+| --- | --- | --- | --- |
+| `kernel` | Both firmware images (with the embedded `boot.mhc`) and the board presets | `changelog/kernel.md` | The ABI version it implements |
+| `sdk` | `mvm-abi`, `mvm-sdk`, `mvm-packer`, and the applet build image | `changelog/sdk.md` | The ABI version it targets |
+| `mesh` | The CLI for macOS, Linux, and Windows | `changelog/mesh.md` | |
+| Each shipped applet (`frisbee`, `stats`, `extra-fs`, `sd`, `fat`, the `lora-modem-*` applets) | Its `.mhc` | `applets/<name>/CHANGELOG.md` | Its `min_abi`, and a kernel version when it needs a kernel fix (advice only) |
+
+- The ABI version is `mvm-abi`'s version (see `crates/mvm-abi`). It has no release of its own: an ABI change ships in an `sdk` release and in the `kernel` release that implements it. Applets depend on the ABI, never on a kernel version, and find features with `sys.has`.
+- `applets/boot` ships inside each kernel release with the kernel's version. `applets/tests` never ships.
+- Versions follow semver: major for a break in what users, applets, or other nodes rely on (an applet's settings, the names it registers, its wire format), minor for additions, patch for fixes. Before 1.0, a break bumps the minor.
+- Every change lands with an entry under "Unreleased" in the changelog of each unit it touched. A release, run with `cargo xtask release <unit> <major|minor|patch>`, moves those entries under the new version, commits, and tags; CI builds the unit and publishes the GitHub Release.
 
 ## crates/mvm-abi
 
@@ -564,7 +581,7 @@ Modules:
   - Transfers never write a target in place. `put`, `cp`, and a cross-mount `mv` write `name.part` beside the target (an interrupted transfer resumes into it), and the rename over the target is the change. littlefs renames are atomic, so a stalled or unplugged copy leaves the running applet's file untouched and resets nothing. A transfer session stages any number of files and `commit` renames them all in one line, so copying several applets costs one reset.
   - `mesh mount` stages `.mhc` writes on the host and lands them by the same rename. A torn file can still come from an applet writing an `.mhc` in place or from a failing flash block. The loader refuses it by `body_hash` and logs it, the rest of the node boots, and copying the file again fixes it.
   - The node boots normally and loads the new file.
-  - USB re-enumerates and BLE reconnects across the reset. `mesh` rescans and reconnects, and `mesh mount` reconnects underneath its stateless NFS mount.
+  - USB re-enumerates and BLE reconnects across the reset. `mesh` rescans and reconnects, and `mesh mount` reconnects underneath its stateless WebDAV mount.
   - An applet that changes its own loaded file from inside its own callback (or one it called), or writes raw flash under any file, gets whatever happens next. v1 accepts this, in keeping with the trust model.
   - Copying an `.mhc` that is not loaded, or editing `config.ini`, does not reset. Applets see a changed value on their next `config.get*`; settings the kernel and bootstrapper read only at boot (`[kernel]`, `[board]`, `[applets]`) apply at the next boot (`mesh reboot`), and `[net]` applies on `net.connect`.
   - Damage that bypasses the VFS (a failing flash block) is not detected at page refill, since there are no page hashes, so it at worst makes that applet misbehave. `mesh verify` rehashes on demand over USB and does nothing at runtime.
@@ -680,7 +697,7 @@ code:     instruction image, then initial .rodata and .data
 
 ## apps/mesh
 
-The CLI, a full user tool on macOS and Linux. It is `mvm-core` plus `mvm-sim` plus the USB and BLE host backends. It is a standalone binary, not a library inside another app. Only the USB and BLE backends differ per OS, behind `cfg(target_os)`; everything else, including `mesh run` and the simulator, is portable. "Darwin" elsewhere in this plan means the desktop host node, which runs the same on Linux.
+The CLI, a full user tool on macOS, Linux, and Windows. It is `mvm-core` plus `mvm-sim` plus the USB and BLE host backends. It is a standalone binary, not a library inside another app. Only the USB and BLE backends differ per OS, behind `cfg(target_os)`; everything else, including `mesh run`, `mesh mount`'s WebDAV server, and the simulator, is portable. "Darwin" elsewhere in this plan means the desktop host node, which runs the same on Linux and Windows.
 
 This table is the complete command list. The "Built in" column names the implementation-plan step that first builds each command, which is also the first step allowed to use it.
 
@@ -710,7 +727,7 @@ Details:
 - `mesh build` mounts the project into the pinned `mvm-sdk` build image, compiles to an ELF there, and packs it on the host. It needs Docker (or a compatible runtime) and nothing else. The in-container compile entry point is internal, not a user-facing mode.
 - `mesh run <scenario>` is a host node runner. It loads board presets and the scenario. Each node gets its own `/boot` with a `config.ini`, and the kernel writes the default `boot.mhc` there on first run and boots from it, the same as on a board. Backends default to simulated hardware in virtual time. A scenario can switch a node to wall-clock time and real links, as the Darwin frisbee player does when it drives a board as a LoRa modem.
 - The file and node commands are wrappers over shell lines. `mesh ls`, `cat`, `mv`, and `rm` are the shell's `ls`, `cat`, `mv`, and `rm`. `mesh cp` from host to node opens a transfer: for each file it sends `put` (whose reply says where to resume) and `append`s base64 chunks with their CRCs, then ends with one `commit`. From node to host it uses `cat`; between two node paths it sends the shell's `cp`, so the data never crosses the link. `mesh cfg` wraps the hardware shell's `cfg get` and `cfg set`. `mesh verify` runs `hash` on each loaded applet's file and compares it with the content hash `ps` reports, taken at load. `mesh ps`, `log`, and `reboot` are the shell commands of the same names. They work the same against a host node's virtual stream.
-- `mesh mount` runs a small NFSv3 server on localhost inside `mesh`, bridged to shell commands, and mounts it with the operating system's own NFS client: no `sudo` on macOS, `sudo` on Linux. Locking is off. The bridge drops Finder litter (`.DS_Store`, `._*`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`) so it never reaches flash, and editors' save-by-rename works. Every file the client writes is held in the bridge and, once the client commits and goes quiet, sent whole through the same `put` and `commit` as `mesh cp`, so in-place edits, truncation, and size changes all become one whole-file replace, and a loaded applet is only ever replaced by a whole file. The mount survives node resets, because NFS is stateless and the bridge reconnects underneath it. It is how a user edits `config.ini`, including pasting a board preset into `[board]`.
+- `mesh mount` runs a small WebDAV server on localhost inside `mesh`, bridged to shell commands, and mounts it with the operating system's own WebDAV client: Finder's (`mount_webdav`) on macOS and `net use` on Windows, with no `sudo`, and `davfs2` on Linux, with `sudo`. Locking is in effect off: `LOCK` is always granted, because the macOS and Windows clients mount read-only without it. The bridge drops Finder litter (`.DS_Store`, `._*`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`) so it never reaches flash, and editors' save-by-rename works. A WebDAV `PUT` carries a whole file, and the bridge sends each one through the same `put` and `commit` as `mesh cp`, so in-place edits, truncation, and size changes all become one whole-file replace, and a loaded applet is only ever replaced by a whole file. The mount survives node resets, because WebDAV is stateless HTTP and the bridge reconnects underneath it. It is how a user edits `config.ini`, including pasting a board preset into `[board]`.
 - `mesh cfg <instance>` lists the keys in that instance's section, through the shell's `cfg list` over `config.keys`. `mesh cfg <instance> key=value` edits that instance's section in `/boot/config.ini`. Other sections are edited through `mesh mount`.
 - `mesh reboot` sends `reboot`, which resets the node with reason word `reboot`, after `sys.rebooting`.
 - There is no `mesh stop` or `mesh restart`. To stop an applet, remove it from `[applets]` and `mesh reboot`. An applet is reloaded by a reset (`mesh reboot`, or replacing its file).
@@ -719,8 +736,8 @@ Details:
 - `mesh ping` works with no applets loaded, an unmountable `/boot`, and no `[board]`. It prints the kernel and ABI versions, the detected part, and the last reset reason.
 - `mesh tty` opens the node's shell for typing commands by hand, with the same lines `mesh` sends. In a `hal-test` build it adds `test list` and `test run <id>|all`, the same suite the bench runs. `mesh tty --freq … --sf … --bw … --cr … --power …` starts straight in the shell's `lora` mode: each typed line goes out as one LoRa frame, and each received frame prints as `[rssi snr] text`. In native bring-up it drives the radio driver directly. Once the kernel radio service exists, it is a client of that service. Its settings follow the same rule as any `radio.config`: last writer wins, and applets get `radio.configured`.
 - `mesh net`, `mesh names`, and `mesh pins` wrap the hardware shell's `net`, `names`, and `pins`: the network state (association, address, open sockets per applet), the name table with each stack's layers from top to bottom, and the pin map with conflicts marked.
-- USB serial, found by USB serial number on both systems. On macOS, open `/dev/cu.usbmodem*`, not `/dev/tty.*`, and watch IOKit notifications. On Linux, open `/dev/ttyACM*` (or `/dev/serial/by-id/`) and watch udev; the user needs to be in the `dialout` group (or a udev rule). Assert DTR. The device node disappears across reset and DFU, so rescan.
-- BLE central for `--node ble:` and the modem link: CoreBluetooth on macOS, BlueZ (over D-Bus) on Linux. Same shell lines as USB.
+- USB serial, found by USB serial number on every system. On macOS, open `/dev/cu.usbmodem*`, not `/dev/tty.*`, and watch IOKit notifications. On Linux, open `/dev/ttyACM*` (or `/dev/serial/by-id/`) and watch udev; the user needs to be in the `dialout` group (or a udev rule). On Windows, find the COM port carrying that serial number through SetupAPI and watch device-change notifications. Assert DTR. The device node disappears across reset and DFU, so rescan.
+- BLE central for `--node ble:` and the modem link: CoreBluetooth on macOS, BlueZ (over D-Bus) on Linux, and WinRT on Windows. Same shell lines as USB.
 - When the scenario uses a real radio, Darwin loads `frisbee` and `lora-modem-host`. It does not link an SX1262 driver.
 
 ## apps/mvm-nrf
@@ -818,7 +835,7 @@ The `radio.*` calls take a radio index from the start, so a second radio needs n
 
 Runs on Darwin under MVM, next to frisbee. The profile has no local radio, so the kernel does not install `radio.config` or `radio.tx`. This applet's `init` registers those two names. Their callbacks send `modem` lines. It delivers packets with `mesh("evt.emit", "radio.rx", ...)`, converting the tag's `time_us` to the host's `time.now` clock with the offset it measures by `modem ping`. On a USB link it handles the `uart.open` callback's `down` and `up` kinds: `down` surfaces as `ERR_UNAVAILABLE` to callers, and after `up` it waits for `!modem hello` and resends `modem config`. Each `radio.tx` it receives carries the caller's callback reference, and it finishes the request with `mesh("sys.resolve", ref, …)` when the tag reports `!modem txdone`. Frisbee subscribes with `mesh("evt.on", "radio.rx", ...)` and calls `mesh("radio.tx", ...)`. Callers that need these registrations use them from `sys.ready` onward.
 
-The node profile picks the link. BLE is the primary one: this applet is the central, and it uses the kernel BLE calls (CoreBluetooth under the macOS host HAL, BlueZ under Linux). Over USB, the host profile's `[board]` maps a `uart` name to the board's serial port with `uart.<name>.usb_serial` (found by USB serial number, as `mesh` does) or `uart.<name>.path`, the host bootstrapper's layer turns it into a `uart.open` spec (`path=…` or `usb_serial=…`, which the host HAL resolves), and the applet uses `uart.open`. Both carry the same shell lines. The applet does not talk to an SX1262.
+The node profile picks the link. BLE is the primary one: this applet is the central, and it uses the kernel BLE calls (CoreBluetooth under the macOS host HAL, BlueZ under Linux, WinRT under Windows). Over USB, the host profile's `[board]` maps a `uart` name to the board's serial port with `uart.<name>.usb_serial` (found by USB serial number, as `mesh` does) or `uart.<name>.path`, the host bootstrapper's layer turns it into a `uart.open` spec (`path=…` or `usb_serial=…`, which the host HAL resolves), and the applet uses `uart.open`. Both carry the same shell lines. The applet does not talk to an SX1262.
 
 Cable pull and laptop sleep surface as `ERR_UNAVAILABLE`, then `!modem hello` and `modem config` on reconnect. A flooded link must exercise `err busy`, the ring, and the drop counter. Startup logs this applet's content hash next to the tag's, so the soak proves which artifact ran where.
 
@@ -865,7 +882,7 @@ FAT16 and FAT32 filesystem provider on any block device. A good starting point i
 
 ```mermaid
 flowchart TB
-  meshCli[mesh CLI on macOS or Linux]
+  meshCli[mesh CLI on macOS, Linux, or Windows]
   sim[mvm-sim medium]
   core[mvm-core]
   vm[RV32IMAFC interpreter]

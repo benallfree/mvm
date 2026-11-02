@@ -65,7 +65,11 @@ Run the ripple check again against what the step actually produced and what the 
 
 ### 6. Commit
 
-One commit per step. It holds the code, the tests, the box and `Result:` line, and every plan edit the step caused. The subject names the step, for example `0.2 Create the Cargo workspace`.
+One commit per step. It holds the code, the tests, the box and `Result:` line, every plan edit the step caused, and, from 0.3a on, an entry under "Unreleased" in the changelog of each release unit the step changed (see the design plan's Releases section). The subject names the step, for example `0.2 Create the Cargo workspace`.
+
+### 7. Suggest a release
+
+After a commit, when every test passes (host, simulator, and the bench boards that apply) and a release unit has unreleased changes worth shipping, suggest releasing it: the unit, the level (patch, minor, or major) and why, and the changelog section it would publish. A release is its own approval, apart from the commit. Run `cargo xtask release` only on the user's go-ahead. Releases are GitHub Releases.
 
 ## The ripple check
 

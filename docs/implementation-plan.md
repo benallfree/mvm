@@ -122,9 +122,14 @@ M1 and M2 run in sequence: no interpreter work starts until M1's exit check pass
   - Expect: Identical stub image bytes from both machines; rechecked on the 0.4 blink image. The digest is recorded and used by 0.3 and 0.5.
 
 - [ ] **0.3 Add CI**
-  - Do: CI runs format check, clippy with warnings as errors, and host tests. Build jobs for `riscv32imafc-unknown-none-elf` (a trivial `no_std` crate until 2.1b adds the applet target, since no workspace member builds for it), and both kernel images inside the firmware build image from 0.2a (`thumbv7em-none-eabihf` and the ESP32-S3 target), and `mesh` built and host-tested on both macOS and Linux (each with its own USB and BLE backend).
+  - Do: CI runs format check, clippy with warnings as errors, and host tests. Build jobs for `riscv32imafc-unknown-none-elf` (a trivial `no_std` crate until 2.1b adds the applet target, since no workspace member builds for it), and both kernel images inside the firmware build image from 0.2a (`thumbv7em-none-eabihf` and the ESP32-S3 target), and `mesh` built and host-tested on macOS, Linux, and Windows (each with its own USB and BLE backend).
   - Check: Push a branch and open a PR.
   - Expect: All jobs pass. A deliberate clippy warning fails the build.
+
+- [ ] **0.3a Release pipeline**
+  - Do: The changelogs from the design plan's [Releases](mesh_virtual_machine_5ae0e741.plan.md#releases) section, in Keep a Changelog form, each opening with an "Unreleased" section. `cargo xtask release <unit> <major|minor|patch>` bumps the unit's version, moves "Unreleased" under the new version and date, commits, and tags `<unit>-vX.Y.Z`. A CI workflow on those tags builds the unit and publishes a GitHub Release with that version's changelog section as its notes; for `mesh`, binaries for macOS (arm64, x86_64), Linux (x86_64, arm64), and Windows (x86_64). `mesh --version` prints its version. The released crates take their own versions in place of 0.2's shared `[workspace.package]` version. Needs the GitHub remote from 0.3.
+  - Check: Release `mesh` as `mesh-v0.0.1`, marked as a pre-release. Download each binary on macOS, Linux, and Windows and run `mesh --version`.
+  - Expect: The GitHub Release holds the five binaries with the changelog section as its notes, and each binary prints `0.0.1`. The tag and the changelog commit are on `main`.
 
 - [ ] **0.4 Blink on every board**
   - Do: The smallest image per family, linked on nRF at the installed SoftDevice's app address recorded in 0.1, that logs a counter, using the HAL ecosystem each family will use for real (for example `embassy-nrf` and `esp-hal`). On ESP32-S3 it logs on both USB-Serial-JTAG and UART0, so it reaches the Mac whichever USB path a board has.
@@ -266,8 +271,8 @@ A step is checked when every applicable cell is `✅` for the boards on the benc
   - Expect: While interrupted, the target still has the old file's hash and a `.part` file sits beside it. The copy resumes rather than restarting, the part file is gone afterwards, and hashes match everywhere. The same copy done by hand with `put`, `append`, and `commit` in `mesh tty` gives the same file. A chunk with a wrong CRC is refused. The three files land together at the one `commit`. The node-side `cp` produces a matching hash and console lines are answered between its chunks. `ls`, `stat`, and `rm` show each change, and the node-to-host copy matches.
 
 - [ ] **1.8a `mesh mount`**
-  - Do: A local NFSv3 server inside `mesh`, bridged to the shell's file commands, mounted with the operating system's NFS client (no `sudo` on macOS). Locking off. Finder litter (`.DS_Store`, `._*`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`) is dropped in the bridge. Every file the client writes is staged in the bridge and landed whole through `put` and `commit` after the client commits.
-  - Check: Mount every board in turn. Browse it in Finder, edit `/boot/config.ini` in a text editor and save, copy a file in with Finder, copy an `.mhc` in with Finder and kill the copy halfway, then reset the board while mounted. Repeat against a host node. Edit `config.ini` in place in a text editor that rewrites part of the file, and truncate a file.
+  - Do: A local WebDAV server inside `mesh`, bridged to the shell's file commands, mounted with the operating system's WebDAV client (Finder on macOS and `net use` on Windows, with no `sudo`; `davfs2` on Linux). `LOCK` is always granted. Finder litter (`.DS_Store`, `._*`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`) is dropped in the bridge. Each `PUT` is landed whole through `put` and `commit`.
+  - Check: Mount every board in turn from macOS, and one board from Linux and from Windows. Browse it in Finder, edit `/boot/config.ini` in a text editor and save, copy a file in with Finder, copy an `.mhc` in with Finder and kill the copy halfway, then reset the board while mounted. Repeat against a host node. Edit `config.ini` in place in a text editor that rewrites part of the file, and truncate a file.
   - Expect: The edit and the copy land intact (check with `mesh cat` and a hash). No litter file reaches the node, and the killed `.mhc` copy leaves the old file (or no file) intact on the node, never a partial one. The mount keeps working after the reset without remounting. Both land as whole-file replaces with the right contents.
 
 - [ ] **1.9 GPIO: LEDs, buttons, interrupts**
@@ -326,7 +331,7 @@ A step is checked when every applicable cell is `✅` for the boards on the benc
   - Expect: Valid NMEA with correct checksums, with no lost bytes over ten minutes.
 
 - [ ] **1.20 BLE byte stream**
-  - Do: `mvm-hal::ble` as a peripheral carrying the same shell lines as USB, and a BLE central in `apps/mesh` (CoreBluetooth on macOS, BlueZ on Linux).
+  - Do: `mvm-hal::ble` as a peripheral carrying the same shell lines as USB, and a BLE central in `apps/mesh` (CoreBluetooth on macOS, BlueZ on Linux, WinRT on Windows).
   - Check: `mesh ping --node ble:<name>` and `mesh tty --node ble:<name>` against every board.
   - Expect: The same behaviour as over USB. On ESP32-S3 a smoke-level pass is acceptable at first if its BLE stack is immature; note what is missing.
 
@@ -872,6 +877,7 @@ Each one names the step expected to answer it.
 - How much RAM does the per-partition TLSF control block cost? (4.7)
 - Does `embedded-sdmmc` fit as the FAT layer over our block-device verbs, and how big is it as an applet? (5.19)
 - Is the code-page fault rate low enough without prefetch? (9.1)
+- Do the shipped applets (everything but `boot` and `tests`) move to their own repo, built only against the published SDK and applet image? Decide at M5's exit, once the ABI has settled.
 
 ## Dropped steps
 
@@ -890,6 +896,7 @@ Short dated notes that do not belong to a single step: decisions, surprises, mea
 - 2026-10-31: M1 split into one step per HAL capability with a board matrix (simulator plus seven boards). Added the XIAO nRF52840 (on the bench), Heltec V3, Heltec V4, and XIAO ESP32S3 (planned). Added Wi-Fi and TCP/IP: native on ESP32-S3 in 1.21, builtins in 5.21 and 5.22.
 - 2026-10-31: Bench recorded: WisMesh Tag, RAK4631 on RAK19002, T-Deck Plus. Board-count steps resized to three boards. XIAO steps wait for a XIAO.
 - 2026-11-01: Added to the bench: Heltec Mesh Node T096 (`T96`) and RAK4631 on RAK19007 with a RAK15002 microSD module (`RSD`). Heltec V3 arrived. `RSD` gives the `sd` applet an nRF board with a card and an SD bus apart from the radio (5.18).
+- 2026-11-01: Releases: the `kernel`, `sdk`, `mesh`, and each shipped applet are release units with their own semver, changelog, and `<unit>-vX.Y.Z` tag, published as GitHub Releases; the ABI version is `mvm-abi`'s and ships in `sdk` and `kernel` releases. `mesh` runs on Windows too, and `mesh mount` serves WebDAV on every system in place of NFS (0.3, 0.3a, 1.8a, 1.20).
 - 2026-11-01: Bench facts recorded (0.1). The nRF boards split between S140 6.1.1 and 7.3.0 (`XN`), so 0.4 builds one nRF image per SoftDevice until 0.6 decides. EnvyBoot, on `TAG` and `T96`, counts as the stock Adafruit bootloader. `HV3` is told apart by its MAC, since its USB serial is generic (0.4, 0.5, 0.6, 0.7).
 - 2026-10-31: Added XIAO extra-flash and T-Deck Plus SD steps to M1 and M5, with separate `sd` and `fat` applets.
 - 2026-10-31: Restructured around the hardware rule. Native bring-up on both chips and a VM spike come first. The ESP32-S3 is a first-class target from M0, not a late milestone. The simulator moved after hardware frisbee.
