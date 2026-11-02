@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-11-02
+
 ### Added
 
 - `mesh --version` prints the version (0.3a).
