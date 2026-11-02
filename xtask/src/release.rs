@@ -23,14 +23,14 @@ struct Unit {
 
 const UNITS: [Unit; 4] = [
     Unit {
-        name: "mesh",
-        changelog: "changelog/mesh.md",
-        version_files: &["apps/mesh/Cargo.toml"],
-        locks: &[("Cargo.lock", "mesh")],
-    },
-    Unit {
         name: "mvm",
         changelog: "changelog/mvm.md",
+        version_files: &["apps/mvm/Cargo.toml"],
+        locks: &[("Cargo.lock", "mvm")],
+    },
+    Unit {
+        name: "firmware",
+        changelog: "changelog/firmware.md",
         version_files: &["apps/mvm-nrf/Cargo.toml", "apps/mvm-esp32s3/Cargo.toml"],
         locks: &[
             ("apps/mvm-nrf/Cargo.lock", "mvm-nrf"),
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn sets_quoted_and_bare_versions() {
-        let toml = "[package]\nname = \"mesh\"\nversion = \"0.0.0\"\n";
+        let toml = "[package]\nname = \"mvm\"\nversion = \"0.0.0\"\n";
         assert_eq!(version_of(toml).unwrap(), "0.0.0");
         assert!(
             set_version(toml, "0.0.0", "0.0.1")
@@ -242,10 +242,10 @@ mod tests {
 
     #[test]
     fn sets_the_lock_entry() {
-        let lock = "[[package]]\nname = \"mesh\"\nversion = \"0.0.0\"\n";
+        let lock = "[[package]]\nname = \"mvm\"\nversion = \"0.0.0\"\n";
         assert_eq!(
-            set_lock_version(lock, "mesh", "0.0.0", "0.0.1").unwrap(),
-            "[[package]]\nname = \"mesh\"\nversion = \"0.0.1\"\n"
+            set_lock_version(lock, "mvm", "0.0.0", "0.0.1").unwrap(),
+            "[[package]]\nname = \"mvm\"\nversion = \"0.0.1\"\n"
         );
     }
 

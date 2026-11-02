@@ -31,9 +31,9 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if [[ "$version" == 0.0.* ]]; then echo "prerelease=true"; else echo "prerelease=false"; fi >> "$GITHUB_OUTPUT"
 
-  mesh:
+  mvm:
     needs: meta
-    if: needs.meta.outputs.unit == 'mesh'
+    if: needs.meta.outputs.unit == 'mvm'
     strategy:
       fail-fast: false
       matrix:
@@ -51,34 +51,34 @@ jobs:
       - if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - run: rustup target add ${{ matrix.target }}
-      - run: cargo build --release -p mesh --target ${{ matrix.target }}
-      - name: Run mesh --version
+      - run: cargo build --release -p mvm --target ${{ matrix.target }}
+      - name: Run mvm --version
         if: matrix.run != 'skip'
         shell: bash
         run: |
-          out="$(${{ matrix.run }} target/${{ matrix.target }}/release/mesh --version)"
+          out="$(${{ matrix.run }} target/${{ matrix.target }}/release/mvm --version)"
           echo "$out"
-          test "$out" = "mesh ${{ needs.meta.outputs.version }}"
+          test "$out" = "mvm ${{ needs.meta.outputs.version }}"
       - name: Package
         shell: bash
         run: |
-          name="mesh-${{ needs.meta.outputs.version }}-${{ matrix.target }}"
+          name="mvm-${{ needs.meta.outputs.version }}-${{ matrix.target }}"
           mkdir -p dist "$name"
           if [[ "${{ matrix.target }}" == *windows* ]]; then
-            cp target/${{ matrix.target }}/release/mesh.exe "$name/"
+            cp target/${{ matrix.target }}/release/mvm.exe "$name/"
             7z a "dist/$name.zip" "$name" > /dev/null
           else
-            cp target/${{ matrix.target }}/release/mesh "$name/"
+            cp target/${{ matrix.target }}/release/mvm "$name/"
             tar czf "dist/$name.tar.gz" "$name"
           fi
       - uses: actions/upload-artifact@v4
         with:
-          name: mesh-${{ matrix.target }}
+          name: mvm-${{ matrix.target }}
           path: dist/*
 
-  mvm:
+  firmware:
     needs: meta
-    if: needs.meta.outputs.unit == 'mvm'
+    if: needs.meta.outputs.unit == 'firmware'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -86,15 +86,15 @@ jobs:
       - run: cargo xtask firmware all
       - run: |
           mkdir -p dist
-          cp target/firmware/amd64/mvm-nrf.uf2 dist/mvm-${{ needs.meta.outputs.version }}-nrf52840.uf2
-          cp target/firmware/amd64/mvm-esp32s3.bin dist/mvm-${{ needs.meta.outputs.version }}-esp32s3.bin
+          cp target/firmware/amd64/mvm-nrf.uf2 dist/mvm-firmware-${{ needs.meta.outputs.version }}-nrf52840.uf2
+          cp target/firmware/amd64/mvm-esp32s3.bin dist/mvm-firmware-${{ needs.meta.outputs.version }}-esp32s3.bin
       - uses: actions/upload-artifact@v4
         with:
-          name: mvm
+          name: firmware
           path: dist/*
 
   publish:
-    needs: [meta, mesh, mvm]
+    needs: [meta, mvm, firmware]
     if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     steps:
@@ -109,11 +109,11 @@ jobs:
           unit="${{ needs.meta.outputs.unit }}"
           version="${{ needs.meta.outputs.version }}"
           case "${{ needs.meta.outputs.unit }}" in
-            mvm) tagline="MVM firmware for nRF52840 and ESP32-S3 boards, ready to flash" ;;
+            firmware) tagline="MVM firmware for nRF52840 and ESP32-S3 boards, ready to flash" ;;
             boot) tagline="The MVM bootstrapper applet" ;;
-            mesh) tagline="The MVM command-line tool: build applets, run simulated meshes, and manage nodes (macOS, Linux, Windows). Building applets requires Docker." ;;
+            mvm) tagline="The MVM command-line tool: build applets, run simulated meshes, and manage nodes (macOS, Linux, Windows). Building applets requires Docker." ;;
             sdk) tagline="Toolkit for building MVM applets in Rust and C" ;;
-            firmware-builder-image) tagline="Docker image that builds MVM kernel firmware. Only needed to build MVM from source; to flash a board, download an \`mvm\` release." ;;
+            firmware-builder-image) tagline="Docker image that builds MVM kernel firmware. Only needed to build MVM from source; to flash a board, download a \`firmware\` release." ;;
           esac
           # The tagline in italics, then the section between this version's
           # heading and the next one.
@@ -123,7 +123,7 @@ jobs:
             on && /^## \[/ { exit }
             on { print }
           ' "changelog/$unit.md" >> notes.md
-          if [[ "$unit" == mvm ]]; then
+          if [[ "$unit" == firmware ]]; then
             ver() { grep -m1 '^version = ' "$1" | cut -d'"' -f2; }
             builder="$(grep -m1 '^version = ' docker/firmware-builder/versions | cut -d' ' -f3)"
             {

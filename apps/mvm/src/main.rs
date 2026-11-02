@@ -1,15 +1,15 @@
-//! The mesh command-line tool.
+//! The MVM command-line tool.
 
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
         Some("--version" | "-V") => {
-            println!("mesh {}", env!("CARGO_PKG_VERSION"));
+            println!("mvm {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
         _ => {
-            eprintln!("usage: mesh --version");
+            eprintln!("usage: mvm --version");
             ExitCode::from(2)
         }
     }

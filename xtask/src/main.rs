@@ -19,7 +19,7 @@ commands:
                                   Build kernel firmware in the pinned builder,
                                   on the host's platform by default. Artifacts
                                   go to target/firmware/<arch>/.
-  release <mesh|mvm|sdk|firmware-builder-image> <major|minor|patch>
+  release <mvm|firmware|sdk|firmware-builder-image> <major|minor|patch>
                                   Bump the unit's version, move its changelog's
                                   Unreleased section under it, commit, tag
                                   <unit>-vX.Y.Z, and push to main. CI publishes
