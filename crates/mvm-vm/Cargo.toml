@@ -1,0 +1,9 @@
+[package]
+name = "mvm-vm"
+description = "The RV32IMAFC interpreter."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

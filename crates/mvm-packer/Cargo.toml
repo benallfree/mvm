@@ -1,0 +1,9 @@
+[package]
+name = "mvm-packer"
+description = "Packs applet ELF files into .mhc images."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

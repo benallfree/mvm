@@ -105,10 +105,16 @@ M1 and M2 run in sequence: no interpreter work starts until M1's exit check pass
   - Expect: A board facts table, committed as `profiles/README.md`, matching the enumeration, `INFO_UF2.TXT`, `espflash`, and `esptool` output for every bench board. Every bench board has a unique USB serial number, or the board is flagged for 0.5. The `➖` cells of the M1 matrix are filled in from it.
   - Result: 2026-11-01. All seven bench boards read and recorded in [profiles/README.md](../profiles/README.md), with document facts sourced line by line. S140 6.1.1 (app at `0x26000`) on `RAK`, `RSD`, `TAG`, and `T96`; S140 7.3.0 (app at `0x27000`) on `XN`, so 0.4 builds two nRF images until 0.6 decides. `TAG` and `T96` run EnvyBoot, an Adafruit fork treated as the stock bootloader. `HV3`'s CP2102 reports the generic serial `0001`, flagged for 0.5. The T-Deck Plus's SD card, radio, and display share one SPI bus. `RAK`'s base is a RAK19003 (the 2026-10-31 log's RAK19002 is a boost module), `XN` is the Sense, and `espflash` does not report PSRAM, so the Check added `esptool chip-id`.
 
-- [ ] **0.2 Create the Cargo workspace**
+- [x] **0.2 Create the Cargo workspace**
   - Do: `Cargo.toml` workspace with empty crates matching the design plan's layout (`crates/*`, `apps/*`, `applets/*`, `fuzz/mvm-mem`, `profiles/`). Pin the stable toolchain in `rust-toolchain.toml` for the host crates and the nRF kernel; the ESP32-S3 kernel's toolchain is pinned by the firmware build image (0.2a). Add `rustfmt.toml` and a `clippy` config.
-  - Check: `cargo build --workspace && cargo test --workspace`.
-  - Expect: Every crate builds and the (empty) test run passes.
+    - Members: the nine `crates/*` (`no_std` libraries, except the host-only `mvm-sim` and `mvm-packer`), `apps/mesh`, `xtask`, and `tests/guards` as the crate `mvm-guards`. A `.cargo/config.toml` alias makes `cargo xtask` run it.
+    - Excluded from the workspace: `apps/mvm-nrf` and `apps/mvm-esp32s3` (folders only; 0.2a puts the firmware stubs in them), `fuzz/mvm-mem` (its own `cargo-fuzz` workspace with an empty target, first run in 4.2), and `applets/*` (each folder holds only a `.gitkeep` until the applet target exists in 2.1b). `scenarios/` holds a `.gitkeep`.
+    - Toolchain: stable `1.99.1`, edition 2024, with `rustfmt`, `clippy`, and the `thumbv7em-none-eabihf` target.
+    - Lints: a `[workspace.lints]` table with `clippy::all = "warn"`, inherited by every crate, and no `clippy.toml`. Warnings become errors on the command line (`-D warnings`).
+    - Metadata: one `[workspace.package]` with version `0.0.0`, `publish = false`, and no license yet. `.gitignore` adds `/target`.
+  - Check: `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, `cargo build --workspace`, `cargo test --workspace`, and `cargo xtask`.
+  - Expect: Every member builds, the (empty) test run passes, format and clippy are clean, and `cargo xtask` prints its usage.
+  - Result: 2026-11-01. All 12 members build on 1.99.1, the empty test run passes, `fmt` and `clippy -D warnings` are clean, and `cargo xtask` prints its usage (an unknown command exits 2). A planted `x == x` failed clippy, so the lint table bites. The seven `no_std` crates also build for `thumbv7em-none-eabihf`. `fuzz/mvm-mem` is not built until 4.2. Pinning `1.99.1` by number makes rustup download it apart from `stable` once per machine.
 
 - [ ] **0.2a Firmware build image**
   - Do: A Dockerfile for kernel firmware, pinned by digest and published for arm64 and amd64 like the applet image (2.1): Espressif's Rust toolchain for the ESP32-S3's Xtensa cores, installed with `espup` at a pinned version, next to stable Rust with `thumbv7em-none-eabihf` for nRF52840, plus the UF2 converter. It builds a stub firmware crate for each family now, and from 0.4 on both kernel images (and from 1.5a their `hal-test` builds). Flashing stays on the host, because Docker on macOS cannot reach USB devices: `cargo xtask bench` installs pinned versions of `espflash` and `probe-rs` on the host and flashes the artifacts the image produced.
@@ -116,7 +122,7 @@ M1 and M2 run in sequence: no interpreter work starts until M1's exit check pass
   - Expect: Identical stub image bytes from both machines; rechecked on the 0.4 blink image. The digest is recorded and used by 0.3 and 0.5.
 
 - [ ] **0.3 Add CI**
-  - Do: CI runs format check, clippy with warnings as errors, and host tests. Build jobs for `riscv32imafc-unknown-none-elf`, and both kernel images inside the firmware build image from 0.2a (`thumbv7em-none-eabihf` and the ESP32-S3 target), and `mesh` built and host-tested on both macOS and Linux (each with its own USB and BLE backend).
+  - Do: CI runs format check, clippy with warnings as errors, and host tests. Build jobs for `riscv32imafc-unknown-none-elf` (a trivial `no_std` crate until 2.1b adds the applet target, since no workspace member builds for it), and both kernel images inside the firmware build image from 0.2a (`thumbv7em-none-eabihf` and the ESP32-S3 target), and `mesh` built and host-tested on both macOS and Linux (each with its own USB and BLE backend).
   - Check: Push a branch and open a PR.
   - Expect: All jobs pass. A deliberate clippy warning fails the build.
 

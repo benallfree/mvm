@@ -1,0 +1,9 @@
+[package]
+name = "mvm-abi"
+description = "Shared names, error codes, and byte layouts for the kernel, the packer, the SDK, and every applet."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

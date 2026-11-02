@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/mvm-abi",
+    "crates/mvm-sdk",
+    "crates/mvm-mem",
+    "crates/mvm-code",
+    "crates/mvm-vm",
+    "crates/mvm-core",
+    "crates/mvm-hal",
+    "crates/mvm-sim",
+    "crates/mvm-packer",
+    "apps/mesh",
+    "tests/guards",
+    "xtask",
+]
+# Firmware builds in the firmware image (0.2a), applets in the applet image
+# (2.1), and the fuzzer on nightly with cargo-fuzz (4.2).
+exclude = [
+    "apps/mvm-nrf",
+    "apps/mvm-esp32s3",
+    "applets",
+    "fuzz/mvm-mem",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -1,0 +1,9 @@
+[package]
+name = "mvm-sdk"
+description = "The applet SDK."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
