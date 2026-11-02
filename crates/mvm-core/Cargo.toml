@@ -1,7 +1,7 @@
 [package]
 name = "mvm-core"
 description = "The portable kernel."
-version.workspace = true
+version = "0.0.0"
 edition.workspace = true
 publish.workspace = true
 

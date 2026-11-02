@@ -76,9 +76,9 @@ jobs:
           name: mesh-${{ matrix.target }}
           path: dist/*
 
-  kernel:
+  mvm:
     needs: meta
-    if: needs.meta.outputs.unit == 'kernel'
+    if: needs.meta.outputs.unit == 'mvm'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -86,15 +86,15 @@ jobs:
       - run: cargo xtask firmware all
       - run: |
           mkdir -p dist
-          cp target/firmware/amd64/mvm-nrf.uf2 dist/mvm-nrf-${{ needs.meta.outputs.version }}.uf2
-          cp target/firmware/amd64/mvm-esp32s3.bin dist/mvm-esp32s3-${{ needs.meta.outputs.version }}.bin
+          cp target/firmware/amd64/mvm-nrf.uf2 dist/mvm-${{ needs.meta.outputs.version }}-nrf52840.uf2
+          cp target/firmware/amd64/mvm-esp32s3.bin dist/mvm-${{ needs.meta.outputs.version }}-esp32s3.bin
       - uses: actions/upload-artifact@v4
         with:
-          name: kernel
+          name: mvm
           path: dist/*
 
   publish:
-    needs: [meta, mesh, kernel]
+    needs: [meta, mesh, mvm]
     if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     steps:
@@ -108,19 +108,41 @@ jobs:
         run: |
           unit="${{ needs.meta.outputs.unit }}"
           version="${{ needs.meta.outputs.version }}"
-          # The section between this version's heading and the next one.
+          case "${{ needs.meta.outputs.unit }}" in
+            mvm) tagline="MVM firmware for nRF52840 and ESP32-S3 boards, ready to flash" ;;
+            boot) tagline="The MVM bootstrapper applet" ;;
+            mesh) tagline="Command-line tool for MVM nodes (macOS, Linux, Windows)" ;;
+            sdk) tagline="Toolkit for building MVM applets in Rust and C" ;;
+            firmware-builder-image) tagline="Docker image that builds MVM kernel firmware" ;;
+          esac
+          # The tagline in italics, then the section between this version's
+          # heading and the next one.
+          printf '*%s*\n' "$tagline" > notes.md
           awk -v v="$version" '
             $0 ~ "^## \\[" v "\\]" { on = 1; next }
             on && /^## \[/ { exit }
             on { print }
-          ' "changelog/$unit.md" > notes.md
-          if [[ "$unit" == firmware-builder-image ]]; then
+          ' "changelog/$unit.md" >> notes.md
+          if [[ "$unit" == mvm ]]; then
+            ver() { grep -m1 '^version = ' "$1" | cut -d'"' -f2; }
+            builder="$(grep -m1 '^version = ' docker/firmware-builder/versions | cut -d' ' -f3)"
             {
               echo
-              echo "### Image"
+              echo "### Components"
+              echo
+              echo "kernel $(ver crates/mvm-core/Cargo.toml) · boot none yet · firmware-builder-image $builder · ABI $(ver crates/mvm-abi/Cargo.toml)"
+            } >> notes.md
+          fi
+          if [[ "$unit" == firmware-builder-image ]]; then
+            {
+              ref="$(grep '^image ' docker/firmware-builder/digest | cut -d' ' -f2)"
+              echo
+              echo "### Docker Hub"
+              echo
+              echo "Published on Docker Hub as [benallfree/mvm-firmware-builder:$version](https://hub.docker.com/r/benallfree/mvm-firmware-builder/tags), multi-arch (\`linux/arm64\` and \`linux/amd64\`). Pull it by digest:"
               echo
               echo '```'
-              grep '^image ' docker/firmware-builder/digest | cut -d' ' -f2
+              echo "docker pull $ref"
               echo '```'
               echo
               echo "### Pinned versions"

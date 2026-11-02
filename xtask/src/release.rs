@@ -29,8 +29,8 @@ const UNITS: [Unit; 4] = [
         locks: &[("Cargo.lock", "mesh")],
     },
     Unit {
-        name: "kernel",
-        changelog: "changelog/kernel.md",
+        name: "mvm",
+        changelog: "changelog/mvm.md",
         version_files: &["apps/mvm-nrf/Cargo.toml", "apps/mvm-esp32s3/Cargo.toml"],
         locks: &[
             ("apps/mvm-nrf/Cargo.lock", "mvm-nrf"),
