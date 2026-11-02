@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-11-02
+
 ### Added
 
 - Stub images that link and boot nothing yet: nRF52840 at `0x26000` (S140 6.1.1) and ESP32-S3 with the ESP-IDF app descriptor, built reproducibly in the firmware builder (0.2a).

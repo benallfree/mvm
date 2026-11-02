@@ -1,7 +1,7 @@
 [package]
 name = "mvm-esp32s3"
 description = "The ESP32-S3 kernel image. A stub until 0.4."
-version = "0.0.0"
+version = "0.0.1"
 edition = "2024"
 publish = false
 
