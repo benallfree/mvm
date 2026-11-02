@@ -43,6 +43,11 @@ Each entry says what the idea is, why it was deferred, and what v1 does instead.
 
 ## Distribution
 
+- **`brew install mvm` from homebrew-core, with no tap.**
+  - Idea: Submit `mvm` to homebrew-core, which builds it from source with `cargo`, so users skip `brew tap`.
+  - Deferred: homebrew-core takes only stable releases (no `0.0.x`) of notable projects (roughly 75 stars, 30 forks, or 30 watchers). The license (MIT) is already in place.
+  - v1 instead: the tap, `brew tap benallfree/mvm` then `brew install mvm` (0.3b).
+
 - **Epidemic applet distribution and automatic upgrades.**
   - Idea: Nodes share applet updates with their neighbours, so a new signed build (see applet signing below) spreads across the mesh and upgrades itself without anyone visiting each node. A node accepts an update only if it has a trusted signer, the same applet name as the file it replaces, the same signer as that file, and a strictly higher version (no rollback over the air).
   - Deferred: it needs chunked transfer over LoRa within duty-cycle limits, resumption, and a policy for when an update is applied (immediately, at the next restart, or at a quiet time).

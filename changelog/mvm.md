@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Install and upgrade with Homebrew (`brew tap benallfree/mvm`, then `brew install mvm`), apt (Debian and Ubuntu, amd64 and arm64), and winget (`winget install mvm`); `.deb` files are attached to each release (0.3b).
+
 ## [0.0.1] - 2026-11-02
 
 ### Added

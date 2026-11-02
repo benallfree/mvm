@@ -52,6 +52,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - run: rustup target add ${{ matrix.target }}
       - run: cargo build --release -p mvm --target ${{ matrix.target }}
+      - name: Build the .deb
+        if: contains(matrix.target, 'linux')
+        run: |
+          cargo install cargo-deb --locked --version 3.8.0
+          cargo deb -p mvm --target ${{ matrix.target }} --no-build --no-strip
+          mkdir -p dist
+          cp target/${{ matrix.target }}/debian/mvm_*.deb dist/
       - name: Run mvm --version
         if: matrix.run != 'skip'
         shell: bash
@@ -123,6 +130,9 @@ jobs:
             on && /^## \[/ { exit }
             on { print }
           ' "changelog/$unit.md" >> notes.md
+          if [[ "$unit" == mvm ]]; then
+            cat packaging/install-notes.md >> notes.md
+          fi
           if [[ "$unit" == firmware ]]; then
             ver() { grep -m1 '^version = ' "$1" | cut -d'"' -f2; }
             builder="$(grep -m1 '^version = ' docker/firmware-builder/versions | cut -d' ' -f3)"
@@ -169,3 +179,44 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/* \
             --title "${{ needs.meta.outputs.unit }} ${{ needs.meta.outputs.version }}" \
             --notes-file notes.md "${flags[@]}"
+
+  # Homebrew, apt, and winget (implementation plan 0.3b), after the release
+  # exists so their download URLs resolve.
+  packages:
+    needs: [meta, publish]
+    if: needs.meta.outputs.unit == 'mvm'
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$GITHUB_REF_NAME" -D dist
+      - name: Homebrew tap
+        env:
+          GH_TOKEN: ${{ secrets.PACKAGING_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/benallfree/homebrew-mvm.git" tap
+          mkdir -p tap/Formula
+          packaging/homebrew/formula.sh "$VERSION" dist > tap/Formula/mvm.rb
+          cd tap
+          git config user.name "mvm release" && git config user.email "mvm-release@users.noreply.github.com"
+          git add -A && git commit -m "mvm $VERSION" && git push
+      - name: apt repository
+        env:
+          GH_TOKEN: ${{ secrets.PACKAGING_TOKEN }}
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y apt-utils
+          printf '%s\n' "$APT_SIGNING_KEY" | gpg --batch --import
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/benallfree/mvm-apt.git" apt
+          packaging/apt/publish.sh "$PWD/dist" "$PWD/apt"
+          cd apt
+          git config user.name "mvm release" && git config user.email "mvm-release@users.noreply.github.com"
+          git add -A && git commit -m "mvm $VERSION" && git push
+      - name: winget
+        env:
+          GH_TOKEN: ${{ secrets.PACKAGING_TOKEN }}
+        run: packaging/winget/submit.sh "$VERSION" dist

@@ -8,3 +8,14 @@ license.workspace = true
 
 [lints]
 workspace = true
+
+# The .deb for apt (implementation plan 0.3b), built with `cargo deb`.
+[package.metadata.deb]
+maintainer = "Ben Allfree <ben@benallfree.com>"
+copyright = "2026 Ben Allfree"
+license-file = ["../../LICENSE", "0"]
+extended-description = "The MVM command-line tool: build applets, run simulated meshes, and manage MVM nodes. Building applets requires Docker."
+section = "devel"
+priority = "optional"
+revision = ""
+assets = [["target/release/mvm", "usr/bin/", "755"]]
