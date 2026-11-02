@@ -130,10 +130,28 @@ jobs:
             on && /^## \[/ { exit }
             on { print }
           ' "changelog/$unit.md" >> notes.md
-          # Install and Upgrade sections only once the package managers are
-          # switched on (repo variable PUBLISH_PACKAGES, implementation plan 0.3b).
-          if [[ "$unit" == mvm && "${{ vars.PUBLISH_PACKAGES }}" == true ]]; then
-            cat packaging/install-notes.md >> notes.md
+          # Install and Upgrade sections list only the package managers that
+          # are switched on (repo variables PUBLISH_HOMEBREW, PUBLISH_APT, and
+          # PUBLISH_WINGET; implementation plan 0.3b and 2.6f).
+          if [[ "$unit" == mvm ]]; then
+            upgrade=()
+            {
+              echo
+              echo "### Install"
+              if [[ "${{ vars.PUBLISH_HOMEBREW }}" == true ]]; then cat packaging/notes/homebrew.md; upgrade+=("brew upgrade mvm"); fi
+              if [[ "${{ vars.PUBLISH_APT }}" == true ]]; then cat packaging/notes/apt.md; upgrade+=("sudo apt update && sudo apt install --only-upgrade mvm"); fi
+              if [[ "${{ vars.PUBLISH_WINGET }}" == true ]]; then cat packaging/notes/winget.md; upgrade+=("winget upgrade mvm"); fi
+              echo
+              echo 'Or download an archive below and put `mvm` on your `PATH`.'
+              if (( ${#upgrade[@]} )); then
+                echo
+                echo "### Upgrade"
+                echo
+                echo '```'
+                printf '%s\n' "${upgrade[@]}"
+                echo '```'
+              fi
+            } >> notes.md
           fi
           if [[ "$unit" == firmware ]]; then
             ver() { grep -m1 '^version = ' "$1" | cut -d'"' -f2; }
@@ -182,12 +200,12 @@ jobs:
             --title "${{ needs.meta.outputs.unit }} ${{ needs.meta.outputs.version }}" \
             --notes-file notes.md "${flags[@]}"
 
-  # Homebrew, apt, and winget (implementation plan 0.3b), after the release
-  # exists so their download URLs resolve. Off until the repo variable
-  # PUBLISH_PACKAGES is true.
+  # Homebrew and apt (implementation plan 0.3b) and winget (2.6f), after the
+  # release exists so their download URLs resolve. Each runs only while its
+  # repo variable is true.
   packages:
     needs: [meta, publish]
-    if: needs.meta.outputs.unit == 'mvm' && vars.PUBLISH_PACKAGES == 'true'
+    if: needs.meta.outputs.unit == 'mvm'
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.meta.outputs.version }}
@@ -198,6 +216,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release download "$GITHUB_REF_NAME" -D dist
       - name: Homebrew tap
+        if: vars.PUBLISH_HOMEBREW == 'true'
         env:
           GH_TOKEN: ${{ secrets.PACKAGING_TOKEN }}
         run: |
@@ -208,6 +227,7 @@ jobs:
           git config user.name "mvm release" && git config user.email "mvm-release@users.noreply.github.com"
           git add -A && git commit -m "mvm $VERSION" && git push
       - name: apt repository
+        if: vars.PUBLISH_APT == 'true'
         env:
           GH_TOKEN: ${{ secrets.PACKAGING_TOKEN }}
           APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
@@ -220,6 +240,7 @@ jobs:
           git config user.name "mvm release" && git config user.email "mvm-release@users.noreply.github.com"
           git add -A && git commit -m "mvm $VERSION" && git push
       - name: winget
+        if: vars.PUBLISH_WINGET == 'true'
         env:
           GH_TOKEN: ${{ secrets.PACKAGING_TOKEN }}
         run: packaging/winget/submit.sh "$VERSION" dist
