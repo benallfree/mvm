@@ -7,9 +7,12 @@ use std::{env, fs};
 const USAGE: &str = "usage: cargo xtask <command>
 
 commands:
-  image firmware                  Build the firmware image for linux/arm64 and
-                                  linux/amd64 and record their ids in
-                                  docker/firmware/digest.
+  image firmware [--push <version>]
+                                  Build the firmware image for linux/arm64 and
+                                  linux/amd64 and record it in
+                                  docker/firmware/digest: by local image id, or
+                                  with --push, as the multi-arch image pushed to
+                                  Docker Hub as benallfree/mvm-firmware:<version>.
   firmware <nrf|esp32s3|all> [--platform linux/arm64|linux/amd64]
                                   Build kernel firmware in the pinned image, on
                                   the host's platform by default. Artifacts go
@@ -20,6 +23,7 @@ commands:
 const PLATFORMS: [&str; 2] = ["linux/arm64", "linux/amd64"];
 const DIGEST_FILE: &str = "docker/firmware/digest";
 const REGISTRY_VOLUME: &str = "mvm-firmware-cargo-registry";
+const FIRMWARE_REPO: &str = "benallfree/mvm-firmware";
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -30,6 +34,7 @@ fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         ["image", "firmware"] => image_firmware(),
+        ["image", "firmware", "--push", version] => push_image_firmware(version),
         ["firmware", family, rest @ ..] => match platform_arg(rest) {
             Ok(platform) => firmware(family, &platform),
             Err(e) => Err(e),
@@ -107,12 +112,56 @@ fn image_firmware() -> Result<(), String> {
     Ok(())
 }
 
+/// Builds each platform's image, pushes them as `<version>-<arch>`, joins
+/// them into the multi-arch `<version>`, and records that by digest. This
+/// works with Docker Desktop's default builder, which cannot build several
+/// platforms in one go.
+fn push_image_firmware(version: &str) -> Result<(), String> {
+    let root = repo_root();
+    let tag = format!("{FIRMWARE_REPO}:{version}");
+    let mut parts = Vec::new();
+    for platform in PLATFORMS {
+        let part = format!("{tag}-{}", arch(platform));
+        run(Command::new("docker")
+            .args(["build", "--platform", platform, "-t", &part])
+            .arg(root.join("docker/firmware")))?;
+        run(Command::new("docker").args(["push", &part]))?;
+        parts.push(part);
+    }
+    run(Command::new("docker")
+        .args(["buildx", "imagetools", "create", "-t", &tag])
+        .args(&parts))?;
+    let out = Command::new("docker")
+        .args(["buildx", "imagetools", "inspect", &tag])
+        .args(["--format", "{{json .Manifest}}"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    let json = String::from_utf8_lossy(&out.stdout);
+    let digest = json
+        .split("\"digest\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').nth(1))
+        .ok_or("no digest from imagetools inspect")?;
+    let lines = format!(
+        "# Firmware build image (implementation plan 0.2a, 0.3): the multi-arch\n\
+         # image on Docker Hub, used by digest.\n\
+         image {tag}@{digest}\n"
+    );
+    fs::write(root.join(DIGEST_FILE), lines).map_err(|e| e.to_string())?;
+    println!("pushed {tag}@{digest} and wrote {DIGEST_FILE}");
+    Ok(())
+}
+
+/// The image to run for a platform: the pushed multi-arch image when the
+/// digest file names one, else that platform's local image id.
 fn image_for(platform: &str) -> Result<String, String> {
     let text = fs::read_to_string(repo_root().join(DIGEST_FILE))
         .map_err(|e| format!("{DIGEST_FILE}: {e} (run `cargo xtask image firmware`)"))?;
-    text.lines()
-        .filter(|l| !l.starts_with('#'))
-        .find_map(|l| l.strip_prefix(platform)?.split_whitespace().next())
+    let lines = || text.lines().filter(|l| !l.starts_with('#'));
+    lines()
+        .find_map(|l| l.strip_prefix("image "))
+        .or_else(|| lines().find_map(|l| l.strip_prefix(platform)))
+        .and_then(|rest| rest.split_whitespace().next())
         .map(str::to_string)
         .ok_or_else(|| format!("{DIGEST_FILE} has no image for {platform}"))
 }
