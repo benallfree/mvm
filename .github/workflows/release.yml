@@ -110,10 +110,10 @@ jobs:
           version="${{ needs.meta.outputs.version }}"
           case "${{ needs.meta.outputs.unit }}" in
             firmware) tagline="MVM firmware for nRF52840 and ESP32-S3 boards, ready to flash" ;;
-            boot) tagline="The MVM bootstrapper applet" ;;
+            applet-boot) tagline="The MVM bootstrapper applet" ;;
             mvm) tagline="The MVM command-line tool: build applets, run simulated meshes, and manage nodes (macOS, Linux, Windows). Building applets requires Docker." ;;
             sdk) tagline="The MVM applet SDK: a Docker image with the compilers, libraries, templates, and packer that mvm build runs. Pinned per applet by sdk in mvm.toml." ;;
-            firmware-builder-image) tagline="Docker image that builds MVM kernel firmware. Only needed to build MVM from source; to flash a board, download a \`firmware\` release." ;;
+            firmware-builder) tagline="Docker image that builds MVM kernel firmware. Only needed to build MVM from source; to flash a board, download a \`firmware\` release." ;;
           esac
           # The tagline in italics, then the section between this version's
           # heading and the next one.
@@ -130,10 +130,10 @@ jobs:
               echo
               echo "### Components"
               echo
-              echo "kernel $(ver crates/mvm-core/Cargo.toml) · boot none yet · firmware-builder-image $builder · ABI $(ver crates/mvm-abi/Cargo.toml)"
+              echo "kernel $(ver crates/mvm-core/Cargo.toml) · boot none yet · firmware-builder $builder · ABI $(ver crates/mvm-abi/Cargo.toml)"
             } >> notes.md
           fi
-          if [[ "$unit" == firmware-builder-image ]]; then
+          if [[ "$unit" == firmware-builder ]]; then
             {
               ref="$(grep '^image ' docker/firmware-builder/digest | cut -d' ' -f2)"
               echo

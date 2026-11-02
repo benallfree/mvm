@@ -1,6 +1,6 @@
 # Changelog: firmware
 
-The MVM firmware to flash: the kernel plus the embedded bootstrapper (`boot.mhc`), built by the firmware builder, as `mvm-firmware-<version>-nrf52840.uf2` and `mvm-firmware-<version>-esp32s3.bin`. Each release lists its component versions: kernel, `boot`, `firmware-builder-image`, and ABI.
+The MVM firmware to flash: the kernel plus the embedded bootstrapper (`boot.mhc`), built by the firmware builder, as `mvm-firmware-<version>-nrf52840.uf2` and `mvm-firmware-<version>-esp32s3.bin`. Each release lists its component versions: kernel, `boot`, `firmware-builder`, and ABI.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow semver as the design plan's Releases section describes. Each step adds its entries under "Unreleased"; `cargo xtask release` moves them under the new version.
 

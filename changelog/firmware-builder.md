@@ -1,4 +1,4 @@
-# Changelog: firmware-builder-image
+# Changelog: firmware-builder
 
 The firmware builder: the Docker image that builds kernel firmware, published as the multi-arch `benallfree/mvm-firmware-builder` (`linux/arm64` and `linux/amd64`) and used by digest. It is only needed to build MVM firmware from source (`cargo xtask firmware`, and CI for `firmware` releases); to flash a board, download a `firmware` release. Each release states its digest and its pinned tool versions (`docker/firmware-builder/versions`).
 

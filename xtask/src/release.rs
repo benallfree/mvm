@@ -44,8 +44,8 @@ const UNITS: [Unit; 4] = [
         locks: &[("Cargo.lock", "mvm-sdk"), ("Cargo.lock", "mvm-packer")],
     },
     Unit {
-        name: "firmware-builder-image",
-        changelog: "changelog/firmware-builder-image.md",
+        name: "firmware-builder",
+        changelog: "changelog/firmware-builder.md",
         version_files: &["docker/firmware-builder/versions"],
         locks: &[],
     },
@@ -81,7 +81,7 @@ pub fn release(unit: &str, level: &str) -> Result<(), String> {
         &move_unreleased(&read(unit.changelog)?, &new, &today())?,
     )?;
 
-    if unit.name == "firmware-builder-image" {
+    if unit.name == "firmware-builder" {
         let image = format!("{BUILDER_REPO}:{new}");
         match pushed_digest(&image)? {
             None => push_firmware_builder(&new)?,
