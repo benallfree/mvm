@@ -1,0 +1,149 @@
+# Release workflow (implementation plan 0.3a). `cargo xtask release` pushes a
+# `<unit>-vX.Y.Z` tag; this builds the unit and publishes its GitHub Release,
+# with that version's changelog section as the notes.
+name: Release
+
+on:
+  push:
+    tags: ["*-v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      unit: ${{ steps.tag.outputs.unit }}
+      version: ${{ steps.tag.outputs.version }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    steps:
+      - id: tag
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          unit="${tag%-v*}"
+          version="${tag##*-v}"
+          echo "unit=$unit" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$version" == 0.0.* ]]; then echo "prerelease=true"; else echo "prerelease=false"; fi >> "$GITHUB_OUTPUT"
+
+  mesh:
+    needs: meta
+    if: needs.meta.outputs.unit == 'mesh'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin, os: macos-latest, run: "" }
+          - { target: x86_64-apple-darwin, os: macos-latest, run: "arch -x86_64" }
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, run: "" }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-latest, run: skip }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest, run: "" }
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+    steps:
+      - uses: actions/checkout@v5
+      - if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - run: rustup target add ${{ matrix.target }}
+      - run: cargo build --release -p mesh --target ${{ matrix.target }}
+      - name: Run mesh --version
+        if: matrix.run != 'skip'
+        shell: bash
+        run: |
+          out="$(${{ matrix.run }} target/${{ matrix.target }}/release/mesh --version)"
+          echo "$out"
+          test "$out" = "mesh ${{ needs.meta.outputs.version }}"
+      - name: Package
+        shell: bash
+        run: |
+          name="mesh-${{ needs.meta.outputs.version }}-${{ matrix.target }}"
+          mkdir -p dist "$name"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp target/${{ matrix.target }}/release/mesh.exe "$name/"
+            7z a "dist/$name.zip" "$name" > /dev/null
+          else
+            cp target/${{ matrix.target }}/release/mesh "$name/"
+            tar czf "dist/$name.tar.gz" "$name"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mesh-${{ matrix.target }}
+          path: dist/*
+
+  kernel:
+    needs: meta
+    if: needs.meta.outputs.unit == 'kernel'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask firmware all
+      - run: |
+          mkdir -p dist
+          cp target/firmware/amd64/mvm-nrf.uf2 dist/mvm-nrf-${{ needs.meta.outputs.version }}.uf2
+          cp target/firmware/amd64/mvm-esp32s3.bin dist/mvm-esp32s3-${{ needs.meta.outputs.version }}.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kernel
+          path: dist/*
+
+  publish:
+    needs: [meta, mesh, kernel]
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Release notes
+        shell: bash
+        run: |
+          unit="${{ needs.meta.outputs.unit }}"
+          version="${{ needs.meta.outputs.version }}"
+          # The section between this version's heading and the next one.
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' "changelog/$unit.md" > notes.md
+          if [[ "$unit" == firmware-builder-image ]]; then
+            {
+              echo
+              echo "### Image"
+              echo
+              echo '```'
+              grep '^image ' docker/firmware-builder/digest | cut -d' ' -f2
+              echo '```'
+              echo
+              echo "### Pinned versions"
+              echo
+              echo '```'
+              grep -v '^#' docker/firmware-builder/versions | grep -v '^$'
+              echo '```'
+            } >> notes.md
+          fi
+          cat notes.md
+      - name: Checksums
+        shell: bash
+        run: |
+          mkdir -p dist
+          if compgen -G "dist/*" > /dev/null; then (cd dist && sha256sum * > SHA256SUMS); fi
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          shopt -s nullglob
+          flags=()
+          if [[ "${{ needs.meta.outputs.prerelease }}" == true ]]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "${{ needs.meta.outputs.unit }} ${{ needs.meta.outputs.version }}" \
+            --notes-file notes.md "${flags[@]}"

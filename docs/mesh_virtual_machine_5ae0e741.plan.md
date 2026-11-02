@@ -112,9 +112,9 @@ mvm/
   changelog/
 ```
 
-`applets/tests/` holds the purpose-built test applets, `tests/guards/` the drift-guard tests, `scenarios/` the `mesh run` scenarios, `xtask/` the repo tooling (`cargo xtask bench`, `cargo xtask guards`, `cargo xtask release`), `docker/` the firmware and applet build images, and `changelog/` the changelogs of the `kernel`, `sdk`, and `mesh` release units (see Releases).
+`applets/tests/` holds the purpose-built test applets, `tests/guards/` the drift-guard tests, `scenarios/` the `mesh run` scenarios, `xtask/` the repo tooling (`cargo xtask bench`, `cargo xtask guards`, `cargo xtask release`), `docker/` the two builder images (`docker/firmware-builder/` and `docker/applet-builder/`), and `changelog/` the changelogs of the `kernel`, `sdk`, `mesh`, and `firmware-builder-image` release units (see Releases).
 
-Kernel firmware is built in its own pinned firmware build image, like applets are built in the applet image: Espressif's Rust toolchain for the ESP32-S3's Xtensa cores next to stable Rust for nRF52840, so every machine and CI builds identical kernels. Flashing runs on the host with pinned `espflash` and `probe-rs`, because containers on macOS cannot reach USB devices.
+Names: *firmware* is only ever what goes on a board (the kernel's `.uf2` and `.bin`); a *builder* is a Docker image holding compilers. Kernel firmware is built in the pinned firmware builder image (`benallfree/mvm-firmware-builder`), like applets are built in the applet builder image (`benallfree/mvm-applet-builder`): Espressif's Rust toolchain for the ESP32-S3's Xtensa cores next to stable Rust for nRF52840, so every machine and CI builds identical kernels. Flashing runs on the host with pinned `espflash` and `probe-rs`, because containers on macOS cannot reach USB devices.
 
 An applet never links an MCU HAL. Kernel crates never link applet game logic.
 
@@ -124,17 +124,19 @@ Each release unit has its own semver version, its own changelog, and its own tag
 
 | Unit | Contents | Changelog | Each release states |
 | --- | --- | --- | --- |
-| `kernel` | Both firmware images (with the embedded `boot.mhc`) and the board presets | `changelog/kernel.md` | The ABI version it implements and the `firmware-image` version it was built with |
-| `sdk` | `mvm-abi`, the Rust and C SDKs (`mvm-sdk` and the C runtime), `mvm-packer`, and the applet build image, pushed to Docker Hub as `benallfree/mvm-sdk:<version>` | `changelog/sdk.md`, with Rust and C sections | The ABI version it targets |
-| `firmware-image` | The kernel firmware build image, pushed to Docker Hub as `benallfree/mvm-firmware:<version>` | `changelog/firmware-image.md` | Its multi-arch digest and its pinned tool versions (`docker/firmware/versions`) |
+| `kernel` | The nRF52840 `.uf2` and ESP32-S3 `.bin` firmware (with the embedded `boot.mhc`) and the board presets | `changelog/kernel.md` | The ABI version it implements and the `firmware-builder-image` version it was built with |
+| `sdk` | `mvm-abi`, the Rust and C SDKs (`mvm-sdk` and the C runtime), `mvm-packer`, and the applet builder image, pushed to Docker Hub as `benallfree/mvm-applet-builder:<version>` | `changelog/sdk.md`, with Rust and C sections | The ABI version it targets |
+| `firmware-builder-image` | The Docker image that builds kernel firmware, pushed to Docker Hub as `benallfree/mvm-firmware-builder:<version>` | `changelog/firmware-builder-image.md` | Its multi-arch digest and its pinned tool versions (`docker/firmware-builder/versions`) |
 | `mesh` | The CLI for macOS, Linux, and Windows | `changelog/mesh.md` | |
 | Each shipped applet (`frisbee`, `stats`, `extra-fs`, `sd`, `fat`, the `lora-modem-*` applets) | Its `.mhc` | `applets/<name>/CHANGELOG.md` | Its `min_abi`, and a kernel version when it needs a kernel fix (advice only) |
 
 - The ABI version is `mvm-abi`'s version (see `crates/mvm-abi`). It has no release of its own: an ABI change ships in an `sdk` release and in the `kernel` release that implements it. Applets depend on the ABI, never on a kernel version, and find features with `sys.has`.
 - `applets/boot` ships inside each kernel release with the kernel's version. `applets/tests` never ships.
 - Versions follow semver: major for a break in what users, applets, or other nodes rely on (an applet's settings, the names it registers, its wire format), minor for additions, patch for fixes. Before 1.0, a break bumps the minor.
-- Images are multi-arch (`linux/arm64` and `linux/amd64`) and are always used by digest, never by tag: `docker/firmware/digest` holds the firmware image's, and `mesh` holds each SDK release's. An image's version follows its effect on what it builds: patch for a rebuild with the same tool versions whose output is byte-identical, minor when any tool version changes, major when the way it is invoked changes.
-- Every change lands with an entry under "Unreleased" in the changelog of each unit it touched. A release, run with `cargo xtask release <unit> <major|minor|patch>`, moves those entries under the new version, commits, and tags; CI builds the unit and publishes the GitHub Release.
+- Images are multi-arch (`linux/arm64` and `linux/amd64`) and are always used by digest, never by tag: `docker/firmware-builder/digest` holds the firmware builder's, and `mesh` holds each SDK release's applet builder. A builder image is built on the Mac and pushed per platform (`<version>-arm64`, `<version>-amd64`), then joined into the multi-arch `<version>`. An image's version follows its effect on what it builds: patch for a rebuild with the same tool versions whose output is byte-identical, minor when any tool version changes, major when the way it is invoked changes.
+- Every change lands with an entry under "Unreleased" in the changelog of each unit it touched. A release, run with `cargo xtask release <unit> <major|minor|patch>` on a clean, up-to-date `main`, bumps the version, moves those entries under the new version and date, commits, tags, and pushes; a `firmware-builder-image` release also pushes the image first. CI then builds the unit and publishes the GitHub Release, marked as a pre-release while the version is `0.0.x`.
+- Versions live in: `apps/mesh/Cargo.toml` (`mesh`); `apps/mvm-nrf` and `apps/mvm-esp32s3` (`kernel`, kept equal); `crates/mvm-sdk` and `crates/mvm-packer` (`sdk`, kept equal); `docker/firmware-builder/versions` (`firmware-builder-image`). The ABI version is `crates/mvm-abi`'s, bumped by hand when names or layouts change.
+- `mesh` ships as `mesh-<version>-<target>.tar.gz` (`.zip` on Windows) for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, and `x86_64-pc-windows-msvc`, with a `SHA256SUMS` file. A `kernel` release attaches the `.uf2` and `.bin`.
 
 ## crates/mvm-abi
 
@@ -478,7 +480,7 @@ What an applet author gets from `mesh new`. They do not write a linker script.
   - **Applet to non-applet.** This covers the kernel ABI, other firmware, and PC tools. Use explicit little-endian layouts through the `mvm-abi` codecs.
 - Liveness guidance in the crate docs. The event budget catches a turn that runs too long, but not an applet that has stopped being called: a periodic task whose timer was never re-armed, a peripheral that keeps failing fast, or a protocol waiting for a reply that never comes. A long-running applet arms its own `time.setTimeout` check ("have I heard a packet in six hours?") and recovers itself, or calls `sys.reboot`. The SDK may ship a small helper for that pattern. It is a library, not a host service.
 - `mesh build` lives in the CLI and calls this crate's template. `mesh new` copies the template and writes `mesh.toml`, the project file that holds the manifest fields for C and Rust projects alike.
-- **Build image.** The applet toolchain ships as one Docker image per SDK version, pinned by digest: clang and lld with the RISC-V target, the C library built for the applet target with its allocator swap, Rust with `riscv32imafc-unknown-none-elf`, and this crate's template and link settings. `mesh build` always compiles inside it. There is no supported native toolchain mode, so authors keep only their source files and every machine builds the same bytes. Since the loader identifies a build by its content hash, the same source gives the same id on every machine and in CI.
+- **Build image.** The applet toolchain ships as one Docker image per SDK version, the applet builder (`benallfree/mvm-applet-builder`), pinned by digest: clang and lld with the RISC-V target, the C library built for the applet target with its allocator swap, Rust with `riscv32imafc-unknown-none-elf`, and this crate's template and link settings. `mesh build` always compiles inside it. There is no supported native toolchain mode, so authors keep only their source files and every machine builds the same bytes. Since the loader identifies a build by its content hash, the same source gives the same id on every machine and in CI.
 
 ## crates/mvm-mem
 

@@ -1,4 +1,5 @@
-# Kernel firmware build image (implementation plan 0.2a). Built for
+# The firmware builder: the Docker image that builds kernel firmware
+# (implementation plan 0.2a, 0.3a). Built for
 # linux/arm64 and linux/amd64; both must produce identical firmware bytes.
 # Every version here is listed in ./versions.
 

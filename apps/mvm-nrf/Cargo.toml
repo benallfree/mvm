@@ -15,5 +15,5 @@ lto = true
 codegen-units = 1
 panic = "abort"
 
-# Built in the firmware image (0.2a), apart from the host workspace.
+# Built in the firmware builder image (0.2a), apart from the host workspace.
 [workspace]

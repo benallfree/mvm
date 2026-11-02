@@ -1,6 +1,8 @@
-# Pinned versions for kernel firmware builds (implementation plan 0.2a).
-# The image uses the first group; `cargo xtask bench` (0.5) installs the
-# host tools at these versions.
+# The firmware builder's own version and the versions it pins
+# (implementation plan 0.2a, 0.3a). The image uses the "In the image" group;
+# `cargo xtask bench` (0.5) installs the host tools at these versions.
+
+version = 0.0.0
 
 # In the image
 base_image = rust:1.99.1-slim-bookworm@sha256:24707e70a4f1e23d9a7b25202ec43126d28a52294b96aad5c670df1fd1f1d400

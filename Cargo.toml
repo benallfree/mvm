@@ -14,7 +14,7 @@ members = [
     "tests/guards",
     "xtask",
 ]
-# Firmware builds in the firmware image (0.2a), applets in the applet image
+# Firmware builds in the firmware builder image (0.2a), applets in the applet builder image
 # (2.1), and the fuzzer on nightly with cargo-fuzz (4.2).
 exclude = [
     "apps/mvm-nrf",

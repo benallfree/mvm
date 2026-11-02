@@ -1,5 +1,7 @@
 //! Repo tooling, run as `cargo xtask`.
 
+mod release;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::{env, fs};
@@ -7,23 +9,29 @@ use std::{env, fs};
 const USAGE: &str = "usage: cargo xtask <command>
 
 commands:
-  image firmware [--push <version>]
-                                  Build the firmware image for linux/arm64 and
-                                  linux/amd64 and record it in
-                                  docker/firmware/digest: by local image id, or
-                                  with --push, as the multi-arch image pushed to
-                                  Docker Hub as benallfree/mvm-firmware:<version>.
+  firmware-builder [--push <version>]
+                                  Build the firmware builder image for
+                                  linux/arm64 and linux/amd64 and record it in
+                                  docker/firmware-builder/digest: by local image
+                                  id, or with --push, as the multi-arch image
+                                  benallfree/mvm-firmware-builder:<version>.
   firmware <nrf|esp32s3|all> [--platform linux/arm64|linux/amd64]
-                                  Build kernel firmware in the pinned image, on
-                                  the host's platform by default. Artifacts go
-                                  to target/firmware/<arch>/.
+                                  Build kernel firmware in the pinned builder,
+                                  on the host's platform by default. Artifacts
+                                  go to target/firmware/<arch>/.
+  release <mesh|kernel|sdk|firmware-builder-image> <major|minor|patch>
+                                  Bump the unit's version, move its changelog's
+                                  Unreleased section under it, commit, tag
+                                  <unit>-vX.Y.Z, and push to main. CI publishes
+                                  the GitHub Release.
 
 `bench` arrives in 0.5 and `guards` in 4.12.";
 
 const PLATFORMS: [&str; 2] = ["linux/arm64", "linux/amd64"];
-const DIGEST_FILE: &str = "docker/firmware/digest";
-const REGISTRY_VOLUME: &str = "mvm-firmware-cargo-registry";
-const FIRMWARE_REPO: &str = "benallfree/mvm-firmware";
+const BUILDER_DIR: &str = "docker/firmware-builder";
+const DIGEST_FILE: &str = "docker/firmware-builder/digest";
+const REGISTRY_VOLUME: &str = "mvm-firmware-builder-cargo-registry";
+const BUILDER_REPO: &str = "benallfree/mvm-firmware-builder";
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -33,12 +41,13 @@ fn main() -> ExitCode {
             println!("{USAGE}");
             return ExitCode::SUCCESS;
         }
-        ["image", "firmware"] => image_firmware(),
-        ["image", "firmware", "--push", version] => push_image_firmware(version),
+        ["firmware-builder"] => firmware_builder(),
+        ["firmware-builder", "--push", version] => push_firmware_builder(version),
         ["firmware", family, rest @ ..] => match platform_arg(rest) {
             Ok(platform) => firmware(family, &platform),
             Err(e) => Err(e),
         },
+        ["release", unit, level] => release::release(unit, level),
         [command, ..] => Err(format!("unknown command `{command}`\n\n{USAGE}")),
     };
     match result {
@@ -86,25 +95,31 @@ fn run(cmd: &mut Command) -> Result<(), String> {
     }
 }
 
-fn image_firmware() -> Result<(), String> {
+/// Runs a command and returns its trimmed standard output.
+fn output(cmd: &mut Command) -> Result<String, String> {
+    let out = cmd.output().map_err(|e| format!("{cmd:?}: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "{cmd:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+fn firmware_builder() -> Result<(), String> {
     let root = repo_root();
     let mut lines = String::from(
-        "# Firmware build image ids, one per platform (implementation plan 0.2a).\n\
-         # 0.3 replaces them with the pushed multi-arch digest.\n",
+        "# Firmware builder image ids, one per platform (implementation plan 0.2a).\n\
+         # A release replaces them with the pushed multi-arch digest.\n",
     );
     for platform in PLATFORMS {
-        let tag = format!("mvm-firmware:{}", arch(platform));
+        let tag = format!("mvm-firmware-builder:{}", arch(platform));
         run(Command::new("docker")
             .args(["build", "--platform", platform, "-t", &tag])
-            .arg(root.join("docker/firmware")))?;
-        let out = Command::new("docker")
-            .args(["image", "inspect", "--format", "{{.Id}}", &tag])
-            .output()
-            .map_err(|e| e.to_string())?;
-        if !out.status.success() {
-            return Err(format!("docker image inspect {tag} failed"));
-        }
-        let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            .arg(root.join(BUILDER_DIR)))?;
+        let id =
+            output(Command::new("docker").args(["image", "inspect", "--format", "{{.Id}}", &tag]))?;
         lines.push_str(&format!("{platform} {id}\n"));
     }
     fs::write(root.join(DIGEST_FILE), lines).map_err(|e| e.to_string())?;
@@ -116,34 +131,24 @@ fn image_firmware() -> Result<(), String> {
 /// them into the multi-arch `<version>`, and records that by digest. This
 /// works with Docker Desktop's default builder, which cannot build several
 /// platforms in one go.
-fn push_image_firmware(version: &str) -> Result<(), String> {
+fn push_firmware_builder(version: &str) -> Result<(), String> {
     let root = repo_root();
-    let tag = format!("{FIRMWARE_REPO}:{version}");
+    let tag = format!("{BUILDER_REPO}:{version}");
     let mut parts = Vec::new();
     for platform in PLATFORMS {
         let part = format!("{tag}-{}", arch(platform));
         run(Command::new("docker")
             .args(["build", "--platform", platform, "-t", &part])
-            .arg(root.join("docker/firmware")))?;
+            .arg(root.join(BUILDER_DIR)))?;
         run(Command::new("docker").args(["push", &part]))?;
         parts.push(part);
     }
     run(Command::new("docker")
         .args(["buildx", "imagetools", "create", "-t", &tag])
         .args(&parts))?;
-    let out = Command::new("docker")
-        .args(["buildx", "imagetools", "inspect", &tag])
-        .args(["--format", "{{json .Manifest}}"])
-        .output()
-        .map_err(|e| e.to_string())?;
-    let json = String::from_utf8_lossy(&out.stdout);
-    let digest = json
-        .split("\"digest\"")
-        .nth(1)
-        .and_then(|rest| rest.split('"').nth(1))
-        .ok_or("no digest from imagetools inspect")?;
+    let digest = pushed_digest(&tag)?.ok_or("the pushed image has no digest")?;
     let lines = format!(
-        "# Firmware build image (implementation plan 0.2a, 0.3): the multi-arch\n\
+        "# Firmware builder image (implementation plan 0.2a, 0.3a): the multi-arch\n\
          # image on Docker Hub, used by digest.\n\
          image {tag}@{digest}\n"
     );
@@ -152,11 +157,30 @@ fn push_image_firmware(version: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The multi-arch digest of an image on Docker Hub, or `None` when the tag
+/// is not there.
+fn pushed_digest(tag: &str) -> Result<Option<String>, String> {
+    let out = Command::new("docker")
+        .args(["buildx", "imagetools", "inspect", tag])
+        .args(["--format", "{{json .Manifest}}"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Ok(None);
+    }
+    let json = String::from_utf8_lossy(&out.stdout);
+    Ok(json
+        .split("\"digest\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').nth(1))
+        .map(str::to_string))
+}
+
 /// The image to run for a platform: the pushed multi-arch image when the
 /// digest file names one, else that platform's local image id.
 fn image_for(platform: &str) -> Result<String, String> {
     let text = fs::read_to_string(repo_root().join(DIGEST_FILE))
-        .map_err(|e| format!("{DIGEST_FILE}: {e} (run `cargo xtask image firmware`)"))?;
+        .map_err(|e| format!("{DIGEST_FILE}: {e} (run `cargo xtask firmware-builder`)"))?;
     let lines = || text.lines().filter(|l| !l.starts_with('#'));
     lines()
         .find_map(|l| l.strip_prefix("image "))
