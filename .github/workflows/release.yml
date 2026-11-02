@@ -112,7 +112,7 @@ jobs:
             firmware) tagline="MVM firmware for nRF52840 and ESP32-S3 boards, ready to flash" ;;
             boot) tagline="The MVM bootstrapper applet" ;;
             mvm) tagline="The MVM command-line tool: build applets, run simulated meshes, and manage nodes (macOS, Linux, Windows). Building applets requires Docker." ;;
-            sdk) tagline="Toolkit for building MVM applets in Rust and C" ;;
+            sdk) tagline="The MVM applet SDK: a Docker image with the compilers, libraries, templates, and packer that mvm build runs. Pinned per applet by sdk in mvm.toml." ;;
             firmware-builder-image) tagline="Docker image that builds MVM kernel firmware. Only needed to build MVM from source; to flash a board, download a \`firmware\` release." ;;
           esac
           # The tagline in italics, then the section between this version's
