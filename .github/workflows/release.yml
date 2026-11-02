@@ -111,7 +111,7 @@ jobs:
           case "${{ needs.meta.outputs.unit }}" in
             mvm) tagline="MVM firmware for nRF52840 and ESP32-S3 boards, ready to flash" ;;
             boot) tagline="The MVM bootstrapper applet" ;;
-            mesh) tagline="Command-line tool for MVM nodes (macOS, Linux, Windows)" ;;
+            mesh) tagline="The MVM command-line tool: build applets, run simulated meshes, and manage nodes (macOS, Linux, Windows)" ;;
             sdk) tagline="Toolkit for building MVM applets in Rust and C" ;;
             firmware-builder-image) tagline="Docker image that builds MVM kernel firmware" ;;
           esac
