@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-02
+
 ### Added
 
 - The first image (0.2a, 0.3a): `rust:1.99.1-slim-bookworm` pinned by digest, stable Rust 1.99.1 with `thumbv7em-none-eabihf`, espup 0.19.0 with Xtensa Rust 1.98.0.0, espflash 4.7.0, and `uf2conv.py` at microsoft/uf2 `90e9741f217f`. Builds of the same commit are byte-identical on arm64 and amd64.

@@ -1,3 +1,3 @@
-# Firmware build image (implementation plan 0.2a, 0.3): the multi-arch
+# Firmware builder image (implementation plan 0.2a, 0.3a): the multi-arch
 # image on Docker Hub, used by digest.
-image benallfree/mvm-firmware:0.1.0@sha256:0c4c0348af243e42664cdaa0ec50b83ba1c4d810e95f46cfe225b4558802da5f
+image benallfree/mvm-firmware-builder:0.1.0@sha256:0c4c0348af243e42664cdaa0ec50b83ba1c4d810e95f46cfe225b4558802da5f
