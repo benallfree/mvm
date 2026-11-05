@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["interp", "fw"]
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "off"
+panic = "abort"
+# Line tables only: they map host PCs back to the interpreter's phase markers.
+# They don't change the generated code.
+debug = "line-tables-only"
+
+[profile.dev]
+panic = "abort"

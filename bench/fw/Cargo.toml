@@ -1,0 +1,13 @@
+[package]
+name = "fw"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "fw"
+test = false
+bench = false
+
+[dependencies]
+interp = { path = "../interp" }
+kernels = { path = "../../guest/kernels" }

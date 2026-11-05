@@ -8,7 +8,10 @@ hashable chunks with nothing left unresolved.
 - **Round two** (`spike-round2`): slots and manifests are keyed on stable names that
   survive version bumps and new checkouts. `./check.sh` passes 21/21.
 
-The speed spike is planned in [SPEED_SPIKE.md](SPEED_SPIKE.md) and not built yet.
+The speed spike is planned in [SPEED_SPIKE.md](SPEED_SPIKE.md).
+**Round three** (`spike-speed`) adds a cycle estimate without hardware: Unicorn plus
+a Cortex-M4 cost table. Pre-decoded, the interpreter is 51–77x slower than native
+Thumb; the simple loop is 90–148x. Details are in SPEED_SPIKE.md and `bench/RESULTS.md`.
 
 ## Layout
 
@@ -16,7 +19,9 @@ The speed spike is planned in [SPEED_SPIKE.md](SPEED_SPIKE.md) and not built yet
 |---|---|
 | `guest/` | `testcrate` (no_std) + `helper` (second crate) + `applet` (uses core formatting, memcpy, a bounds-check panic), pinned nightly |
 | `guest/build.sh` | The builder. It pins the flags, emits `.o`, and prints the chunker inputs. Env: `PKG`, `CODE_MODEL=small\|medium`, `BUILD_STD=1`, and `LTO=fat` (measurement only). |
-| `chunker/` | The host tool. Commands: `dump`, `hashes`, `roundtrip`, `applet-roundtrip`, `names`, `manifest`, `compare` |
+| `chunker/` | The host tool. Commands: `dump`, `hashes`, `roundtrip`, `applet-roundtrip`, `names`, `manifest`, `compare`, `link` (writes a flat image and entry addresses to disk) |
+| `guest/kernels` | Speed-spike workloads: `crc16` and `parse` |
+| `bench/` | Speed spike: `interp` (no_std simple and pre-decoded RV32IMC interpreters), `fw` (Thumb firmware for Unicorn), `harness/` (Unicorn and the M4 cost model), `run.sh` |
 | `check.sh` | Every check, for both code models, plus the applet |
 
 Builder flags: `-C target-feature=-relax -C codegen-units=1 -C lto=off -Z function-sections=yes -C code-model=<small|medium>`.

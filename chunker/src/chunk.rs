@@ -516,9 +516,20 @@ impl Store {
 
     /// Distinct chunks reachable from `root` (including itself), in discovery order.
     pub fn closure(&self, root: usize) -> Vec<usize> {
+        self.closure_many(&[root])
+    }
+
+    /// Distinct chunks reachable from any of `roots`, in discovery order.
+    pub fn closure_many(&self, roots: &[usize]) -> Vec<usize> {
         let mut seen = vec![false; self.chunks.len()];
-        let mut order = vec![root];
-        seen[root] = true;
+        let mut order = Vec::new();
+        for &r in roots {
+            let r = self.canonical(r);
+            if !seen[r] {
+                seen[r] = true;
+                order.push(r);
+            }
+        }
         let mut i = 0;
         while i < order.len() {
             for s in &self.chunks[order[i]].slots {

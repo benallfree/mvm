@@ -1,0 +1,11 @@
+[package]
+name = "interp"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+# Count guest instructions. Off for timed builds.
+count = []
+
+[dev-dependencies]
+kernels = { path = "../../guest/kernels" }

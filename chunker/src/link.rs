@@ -16,7 +16,11 @@ fn fits(v: i64, bits: u32) -> bool {
 }
 
 pub fn link(store: &Store, entry: usize, base: u32) -> Result<Image> {
-    let order = store.closure(entry);
+    link_many(store, &[entry], base)
+}
+
+pub fn link_many(store: &Store, roots: &[usize], base: u32) -> Result<Image> {
+    let order = store.closure_many(roots);
     let mut addr = HashMap::new();
     let mut pc = base as u64;
     for &ci in &order {
