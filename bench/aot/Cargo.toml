@@ -1,0 +1,7 @@
+[package]
+name = "aot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+interp = { path = "../interp" }

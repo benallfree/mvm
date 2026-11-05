@@ -4,8 +4,10 @@
 the same Rust code compiled natively for the Cortex-M4? And what does streaming
 guest code through a small RAM cache add on top of that?
 
-**Status:** The interpreter, the workloads and a cycle *estimate* exist (round three,
-below). The board run (phase 1 on hardware) and phase 2 are not built yet.
+**Status:**
+- **Built:** the interpreter, the workloads and a cycle *estimate* (round three), plus
+  an ahead-of-time translator compared four ways (round four).
+- **Not built:** the board run (phase 1 on hardware) and phase 2.
 
 ## Estimate without hardware (round three)
 
@@ -131,6 +133,118 @@ How phases are assigned:
 - **Power and energy** per guest instruction and per packet.
 - **Unicorn's own correctness** as an execution model. Its results match native
   here, but it isn't cycle accurate. The cost table supplies the timing.
+
+## Round four: ahead-of-time translation to Thumb (same emulator, CPU only)
+
+`bench/aot` translates the same linked RV32IMC image (912 bytes) into Thumb-2
+assembly ahead of time; `llvm-mc` assembles it. `bench/run.sh` then runs it under
+the same Unicorn harness, with the same cost table and the same accounting as
+round three.
+
+### Four-way comparison (estimated M4 cycles, table model)
+
+| Workload | Native Thumb | AOT | Slowdown | Pre-decoded interp | Slowdown | Simple interp | Slowdown |
+|---|---|---|---|---|---|---|---|
+| crc16 (256 B) | 2092 | 4134 | **1.98x** | 162,110 | 77x | 309,795 | 148x |
+| parse (64 B) | 778 | 2595 | **3.34x** | 39,747 | 51x | 70,099 | 90x |
+
+- **Correctness:** AOT matches native on all 5 inputs, error paths included:
+  crc16 over 256 B and over `"123456789"` (0x29B1), the good packet, a bad checksum
+  (`0x80000006`), and a truncated packet (`0x80000003`).
+- **Placement:** the translated blob runs in place from flash address 0xC4000, which
+  has nothing to do with where it was assembled.
+- **Wall clock at 64 MHz:** about 65 µs for crc16 and 41 µs for parse.
+
+### Code size
+
+| Artifact | crc16 + parse code | Data |
+|---|---|---|
+| Native Thumb | 622 B | 512 B CRC table |
+| RV32IMC image (reachable code) | 390 B | 512 B CRC table |
+| AOT Thumb | 784 B, including 2 entry stubs | embedded copy of the whole 912 B image |
+
+AOT code is 2.0x the RISC-V code and 1.26x native Thumb. The embedded image also
+carries the 390 B of RISC-V code it no longer needs; only the 512 B table is used.
+
+### How the translator works
+
+- **What gets translated:** code is found by following control flow from the entry
+  points, so the CRC table is never decoded as instructions. 138 guest instructions
+  are translated, each to one or more Thumb instructions, with no optimisation passes.
+- **Register mapping** (it's also written at the top of the generated `.s`):
+
+  | Guest | Host |
+  |---|---|
+  | `ra` (x1) | `lr`, so `jal ra` → `bl` and `ret` → `bx lr` |
+  | `sp` (x2) | `sp`: the guest stack is the host stack |
+  | `a0`–`a3` | `r0`–`r3`: AAPCS arguments and result are already in place |
+  | the hottest of the rest, by static use count | `r4`–`r9` (`r4`–`r10` if nothing spills) |
+  | everything else | a 128-byte register file on the host stack, addressed by `r10` |
+  | scratch | `r11`, `r12` |
+
+  With these kernels, 13 of the 21 guest registers they use get host registers and 8 spill.
+- **Position independence:**
+  - Every branch is PC-relative.
+  - A guest address of image data, built with `lui`/`addi`, becomes `adr.w` to the
+    image copy embedded after the code.
+  - An image address used any other way is a translation error.
+  - `run.sh` requires the assembled object to have zero relocations.
+- **Memory model:** guest pointers are host pointers, and loads and stores are plain
+  Thumb loads and stores with no checks. That follows v1's "trust the applet".
+  The interpreters bounds-check every access, so this is part of AOT's advantage.
+- **Host imports:** neither interpreter has a host-call mechanism (`ecall` faults),
+  so the translator rejects `ecall` the same way. A real design needs one for both.
+- **Prototype limits:**
+  - indirect jumps other than `ret` aren't supported;
+  - `auipc` isn't supported, so the guest must use the small code model;
+  - `mulhsu` isn't supported.
+  - Each of these is a translation error, never wrong code.
+
+### Where AOT loses cycles against native
+
+Cycles by translator category (`aotc_<cat>` labels):
+
+| Category | crc16 | parse |
+|---|---|---|
+| guest operation proper (`op`) | 4105 (99.3%) | 1162 (44.8%) |
+| register-file spills (`spill`) | 0 | **1356 (52.3%)** |
+| constants and x0 (`const`) | 0 | 49 (1.9%) |
+| entry stub, push/pop (`stub`) | 28 | 28 |
+| flag materialisation for `slt` (`flags`) | 0 | 0 |
+| shift-amount masking (`shiftmask`) | 0 | 0 |
+
+1. **crc16: instruction count, not overhead.** AOT runs 1.09 Thumb instructions per
+   guest instruction, but RISC-V needs 2825 instructions where native Thumb needs
+   1432. Native uses post-increment loads, shifted-operand EOR, and a 4x unrolled loop.
+   Translating one instruction at a time can't recover those.
+2. **parse: spills.** Registers were allocated by static use count across both
+   functions, so registers that parse's loop uses heavily landed in the register
+   file. Half of parse's cycles are `ldr`/`str` to `[r10]`.
+3. **Flags and calls cost nothing here.** No `slt` runs on a hot path; branches map
+   straight to `cmp` and `b<cc>`; the entry stub is 28 cycles per call.
+
+### One cheap improvement worth trying
+
+**Weight register allocation by loop nesting.** Count a use inside a loop (any
+backward branch's range) as worth, say, 8 uses. Alternatively, use the interpreter's
+execution counts as a profile. It's about 20 lines in `Map::build`.
+- **Upper bound for parse:** if every spill went, 1356 cycles would come off, giving
+  about 1240 cycles, roughly **1.6x native**. How much is actually recoverable depends
+  on whether parse's hot registers fit in `r4`–`r10`. Untested.
+- **For crc16** the matching step is a peephole pass that fuses `slli`+`add` and
+  `srli`+`xor` into Thumb shifted-operand forms, and a load plus pointer increment
+  into post-increment loads.
+
+### What this changes in the plan
+
+- **AOT reaches the round-three target with plenty of room:** 2–3.3x against 30x,
+  and it already beats the target by an order of magnitude.
+- **The trade:** AOT needs a translator on the host or the device, and code that
+  takes about 2x the space of the RISC-V image. The interpreter costs RAM for its
+  pre-decode table instead.
+- **What the board measures:** flash wait states hit native and AOT code in the same
+  way, since both run from flash. The interpreters' data reads from flash are the
+  open question.
 
 ## Hardware and tools
 

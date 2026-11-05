@@ -6,7 +6,11 @@ decode, dispatch, execute, loop) via DWARF line info: the innermost inlined
 frame in bench/interp/src gives a source line, and the closest
 `// @phase:` marker above that line names the phase.
 
-Usage: python3 run.py <fw elf> <guest counts file> <out.md>
+Usage: python3 run.py <fw elf> <guest counts file> <out.md> [<aot.bin> <aot.syms>]
+
+With the AOT blob (round four), the translated code is placed at AOT_AT, an
+arbitrary aligned flash address, checked against native on 5 inputs, timed,
+and costed per translator category (aotc_<cat>_<n> labels).
 """
 
 import bisect
@@ -19,13 +23,16 @@ import sys
 
 from elftools.elf.elffile import ELFFile
 from unicorn import UC_ARCH_ARM, UC_HOOK_CODE, UC_MODE_MCLASS, UC_MODE_THUMB, Uc
-from unicorn.arm_const import UC_ARM_REG_CPSR, UC_ARM_REG_LR, UC_ARM_REG_R0, UC_ARM_REG_SP
+from unicorn.arm_const import (UC_ARM_REG_CPSR, UC_ARM_REG_LR, UC_ARM_REG_R0, UC_ARM_REG_R1,
+                                UC_ARM_REG_R2, UC_ARM_REG_R3, UC_ARM_REG_SP)
 
 import m4_cost
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INTERP_SRC = os.path.normpath(os.path.join(HERE, "..", "interp", "src"))
 RET = 0x1000_0000  # return address: execution stops here
+AOT_AT = 0x000C_4000  # where the translated blob runs from (any 4-aligned flash address)
+AOT_CATS = ["stub", "op", "spill", "const", "flags", "shiftmask", "addr"]
 PHASES = ["setup", "loop", "fetch", "decode", "dispatch", "execute", "wrapper"]
 
 
@@ -36,6 +43,8 @@ def load_elf(path):
         syms = {}
         funcs = []
         for s in elf.get_section_by_name(".symtab").iter_symbols():
+            if s["st_info"]["type"] == "STT_OBJECT":
+                syms[s.name] = s["st_value"]
             if s["st_info"]["type"] == "STT_FUNC" and s["st_size"]:
                 a = s["st_value"] & ~1
                 syms[s.name] = a
@@ -126,13 +135,39 @@ class Machine:
         a, size, name = self.funcs[k]
         return name if a <= addr < a + size else "?"
 
-    def call(self, name):
+    def call(self, name, args=()):
         self.trace = []
         uc = self.uc
         uc.reg_write(UC_ARM_REG_SP, 0x2004_0000)
         uc.reg_write(UC_ARM_REG_LR, RET | 1)
+        for r, v in zip((UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3), args):
+            uc.reg_write(r, v)
         uc.emu_start(self.syms[name] | 1, RET, count=50_000_000)
         return uc.reg_read(UC_ARM_REG_R0), self.trace
+
+    def load_aot(self, path, syms_path, at):
+        """Place translated code at `at` (any 4-aligned flash address) and decode it."""
+        blob = open(path, "rb").read()
+        self.uc.mem_write(at, blob)
+        labels = []
+        for line in open(syms_path):
+            parts = line.split()
+            if len(parts) == 3:
+                labels.append((int(parts[0], 16) + at, parts[2]))
+        labels.sort()
+        for a, n in labels:
+            if n.startswith("aot_"):
+                self.syms[n] = a
+        code_end = self.syms["aot_image"]
+        for ci in m4_cost.MD.disasm(blob[: code_end - at], at):
+            self.code[ci.address] = m4_cost.Insn(ci)
+        self.funcs.append((at, code_end - at, "aot"))
+        self.funcs.sort()
+        self._starts = [f[0] for f in self.funcs]
+        # address -> category, from the aotc_<cat>_<n> labels
+        cats = [(a, n.split("_")[1]) for a, n in labels if n.startswith("aotc_")]
+        self.aot_cats = cats
+        return len(blob), code_end - at
 
 
 def account(m, trace, phases=None):
@@ -162,8 +197,15 @@ def account(m, trace, phases=None):
     return t, ph
 
 
+def rv_code_bytes(syms_path):
+    """RV32IMC code bytes reachable from the entries, as counted by the translator."""
+    info = open(os.path.join(os.path.dirname(syms_path), "info.txt")).read()
+    return int(re.search(r"guest code bytes: (\d+)", info).group(1))
+
+
 def main():
     elf, counts_file, out_md = sys.argv[1:4]
+    aot = sys.argv[4:6] if len(sys.argv) >= 6 else None
     guest = {}
     with open(counts_file) as f:
         for line in f:
@@ -182,6 +224,33 @@ def main():
         runs[("pd cold", w)] = m.call(f"bench_pd_{w}")
         runs[("pd warm", w)] = m.call(f"bench_pd_{w}")
 
+    if aot:
+        blob_size, aot_code = m.load_aot(aot[0], aot[1], AOT_AT)
+        sym = lambda frag: next(v for k, v in m.syms.items() if frag in k)
+        # Correctness: the 5 inputs from the host tests, native vs AOT, same buffer.
+        crc, pkt = bytes(m.uc.mem_read(sym("CRC_IN"), 256)), bytes(m.uc.mem_read(sym("PKT_IN"), 64))
+        bad = bytearray(pkt)
+        bad[63] ^= 1
+        cases = [("crc16", crc), ("crc16", b"123456789"), ("parse", pkt), ("parse", bytes(bad)), ("parse", pkt[:20])]
+        aot_checks = []
+        for w, data in cases:
+            buf = 0x2003_0000
+            m.uc.mem_write(buf, data)
+            want, _ = m.call(w, (buf, len(data)))
+            got, _ = m.call(f"aot_{w}", (buf, len(data)))
+            aot_checks.append((w, len(data), want, got))
+        wrong = [c for c in aot_checks if c[2] != c[3]]
+        if wrong:
+            raise SystemExit(f"AOT mismatch: {wrong}")
+        runs[("aot", "crc16")] = m.call("aot_crc16", (sym("CRC_IN"), 256))
+        runs[("aot", "parse")] = m.call("aot_parse", (sym("PKT_IN"), 64))
+        cat_addrs = [a for a, _ in m.aot_cats]
+        aot_phase = {}
+        for k in (("aot", "crc16"), ("aot", "parse")):
+            for a, _ in runs[k][1]:
+                i = bisect.bisect_right(cat_addrs, a) - 1
+                aot_phase[a] = m.aot_cats[i][1] if i >= 0 else "stub"
+
     interp_addrs = sorted({a for k, (_, tr) in runs.items() if k[0] != "native" for a, _ in tr
                            if "interp" in m.func_of(a)})
     phases = symbolize(elf, interp_addrs)
@@ -192,7 +261,7 @@ def main():
         want = guest[("simple", k[1])][0]
         if ret != want:
             bad.append(f"{k}: returned {ret:#x}, expected {want:#x}")
-        res[k] = account(m, tr, None if k[0] == "native" else phases)
+        res[k] = account(m, tr, None if k[0] == "native" else aot_phase if k[0] == "aot" else phases)
     if bad:
         raise SystemExit("wrong results:\n" + "\n".join(bad))
 
@@ -200,6 +269,46 @@ def main():
     L.append("# Interpreter slowdown estimate (Unicorn + Cortex-M4 cost table)\n")
     L.append("Generated by `bench/run.sh`. Cycle costs: [COSTS.md](COSTS.md). "
              "Every result was checked against native.\n")
+    if aot:
+        L.append("## Four-way comparison\n")
+        L.append("| Workload | Native | AOT | Slowdown | Pre-decoded (warm) | Slowdown | Simple | Slowdown |")
+        L.append("|---|---|---|---|---|---|---|---|")
+        for w in ("crc16", "parse"):
+            nat = res[("native", w)][0]["table"]
+            row = [str(nat)]
+            for k in ("aot", "pd warm", "simple"):
+                c = res[(k, w)][0]["table"]
+                row += [str(c), f"**{c / nat:.2f}x**"]
+            L.append(f"| {w} | " + " | ".join(row) + " |")
+        L.append("")
+        L.append(f"AOT correctness: {len(aot_checks)}/5 inputs match native (" + ", ".join(
+            f"{w}[{n}] {g:#x}" for w, n, _, g in aot_checks) + f"). Run from {AOT_AT:#x}.\n")
+        L.append("### Code size\n")
+        fsz = {f[2]: f[1] for f in m.funcs}
+        nat_sz = fsz["crc16"] + fsz["parse"]
+        L.append("| Artifact | crc16 + parse code | Data |")
+        L.append("|---|---|---|")
+        L.append(f"| Native Thumb | {nat_sz} B (crc16 {fsz['crc16']}, parse {fsz['parse']}) | 512 B CRC table |")
+        L.append(f"| RV32IMC image (code reachable from the entries) | {rv_code_bytes(aot[1])} B | 512 B CRC table (912 B image in all) |")
+        L.append(f"| AOT Thumb | {aot_code} B (incl. stubs) | embedded image copy, {blob_size - aot_code} B with alignment |")
+        L.append("")
+        L.append("### Where AOT spends cycles (table model)\n")
+        L.append("| Category | crc16 cycles | % | parse cycles | % |")
+        L.append("|---|---|---|---|---|")
+        for p in AOT_CATS:
+            row = []
+            for w in ("crc16", "parse"):
+                t, ph = res[("aot", w)]
+                c = ph.get(p, [0, 0])[1]
+                row += [str(c), f"{100 * c / t['table']:.1f}%"]
+            L.append(f"| {p} | " + " | ".join(row) + " |")
+        L.append("")
+        L.append("| Workload | Native host instrs | AOT host instrs | Guest instrs | AOT host instrs / guest instr |")
+        L.append("|---|---|---|---|---|")
+        for w in ("crc16", "parse"):
+            g = guest[("simple", w)][1]
+            L.append(f"| {w} | {res[('native', w)][0]['n']} | {res[('aot', w)][0]['n']} | {g} | {res[('aot', w)][0]['n'] / g:.2f} |")
+        L.append("")
     L.append("## Summary\n")
     L.append("| Workload | Guest instrs | Native cycles | Simple cycles | Slowdown | Pre-decoded (warm) | Slowdown | Pre-decoded (cold) | Slowdown |")
     L.append("|---|---|---|---|---|---|---|---|---|")

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["interp", "fw"]
+members = ["interp", "fw", "aot"]
 
 [profile.release]
 opt-level = 3
