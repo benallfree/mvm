@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["testcrate", "helper"]
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = "off"

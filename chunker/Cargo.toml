@@ -1,0 +1,10 @@
+[package]
+name = "chunker"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+object = { version = "0.36", default-features = false, features = ["read_core", "elf", "archive", "std"] }
+rustc-demangle = "0.1.28"
+sha2 = "0.11.1"
+testcrate = { version = "0.1.0", path = "../guest/testcrate" }
