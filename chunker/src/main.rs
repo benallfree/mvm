@@ -1,14 +1,19 @@
 mod chunk;
 mod emu;
 mod link;
+mod report;
 mod rv;
+mod stable;
 
 use chunk::{Kind, Store, Target, display_name, hex};
 
 const USAGE: &str = "usage:
   chunker dump      <objects/rlibs...>   every chunk, its slots and hash, plus a relocation report
   chunker hashes    <objects/rlibs...>   one line per named chunk and the anonymous chunks it uses (for diffing)
-  chunker roundtrip <objects/rlibs...>   link spike_entry/spike_entry2, run them in the emulator, compare to native";
+  chunker roundtrip <objects/rlibs...>   link spike_entry/spike_entry2, run them in the emulator, compare to native
+  chunker names     <objects/rlibs...>   stable-name counts per crate; 8-byte name / 16-byte chunk hash collisions
+  chunker manifest  --entry E [--entry E2] [--label L] <objects/rlibs...>   manifest size in three encodings
+  chunker compare   --entry E <build A inputs...> -- <build B inputs...>    size and shared hashes, A vs B";
 
 fn load(paths: &[String]) -> Result<Store, String> {
     let mut store = Store::default();
@@ -173,16 +178,112 @@ fn roundtrip(store: &Store) -> Result<(), String> {
     }
 }
 
+/// Run applet_entry in the emulator against the native build, and check that an
+/// out-of-range index ends in the panic handler.
+fn applet_roundtrip(store: &Store) -> Result<(), String> {
+    let entry = *store.by_name.get("applet_entry").ok_or("no applet_entry")?;
+    let base = 0x1000u32;
+    let img = link::link(store, entry, base)?;
+    println!(
+        "applet_entry: linked {} chunks into {} bytes",
+        img.addr.len(),
+        img.bytes.len()
+    );
+    let src: Vec<u8> = (0..40u8)
+        .map(|i| i.wrapping_mul(37).wrapping_add(11))
+        .collect();
+    let (src_at, out_at, out_len) = (0x8_0000u32, 0x9_0000u32, 64usize);
+    let mut ok = true;
+    for idx in [0usize, 3, 39, 40, 1000] {
+        let mut cpu = emu::Cpu::new(1 << 20);
+        cpu.mem[base as usize..][..img.bytes.len()].copy_from_slice(&img.bytes);
+        cpu.mem[src_at as usize..][..src.len()].copy_from_slice(&src);
+        let args = [out_at, out_len as u32, src_at, src.len() as u32, idx as u32];
+        let got = cpu.call(img.addr[&entry], &args, 200_000);
+        if idx < src.len() {
+            let mut out = vec![0u8; out_len];
+            let want = unsafe {
+                applet::applet_entry(out.as_mut_ptr(), out_len, src.as_ptr(), src.len(), idx)
+            };
+            let got = got?;
+            let emu_out = &cpu.mem[out_at as usize..][..out_len];
+            let same = got == want && emu_out == &out[..];
+            ok &= same;
+            let text = String::from_utf8_lossy(
+                &out[..out.iter().position(|&b| b < 32).unwrap_or(out_len)],
+            )
+            .to_string();
+            println!(
+                "  idx {idx:>4}: {} ret {got} vs native {want}, {:?}  ({} steps)",
+                if same { "ok" } else { "MISMATCH" },
+                text,
+                cpu.steps
+            );
+        } else {
+            // The panic handler is `loop {}`, so a panic shows up as the step limit with pc inside it.
+            let handler = *store
+                .by_name
+                .get("__rustc::rust_begin_unwind")
+                .ok_or("no panic handler")?;
+            let h = img.addr[&store.canonical(handler)];
+            let len = store.chunks[handler].bytes.len() as u32;
+            let in_handler = got.is_err() && (h..h + len).contains(&cpu.pc);
+            ok &= in_handler;
+            println!(
+                "  idx {idx:>4}: {} ({:?}, pc {:#x}, handler at {h:#x})",
+                if in_handler {
+                    "ok, panicked into rust_begin_unwind"
+                } else {
+                    "NO PANIC"
+                },
+                got,
+                cpu.pc
+            );
+        }
+    }
+    if ok {
+        Ok(())
+    } else {
+        Err("applet round trip failed".into())
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (cmd, inputs) = match args.split_first() {
+    let (cmd, rest) = match args.split_first() {
         Some((c, rest)) if !rest.is_empty() => (c.as_str(), rest),
         _ => {
             eprintln!("{USAGE}");
             std::process::exit(2);
         }
     };
-    let res = load(inputs).and_then(|mut store| match cmd {
+    let (mut entries, mut label, mut inputs) = (Vec::new(), String::from("build"), Vec::new());
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--entry" => entries.push(it.next().expect("--entry needs a value").clone()),
+            "--label" => label = it.next().expect("--label needs a value").clone(),
+            _ => inputs.push(a.clone()),
+        }
+    }
+    if cmd == "compare" {
+        let split = inputs
+            .iter()
+            .position(|a| a == "--")
+            .expect("compare needs `--` between builds");
+        let res = load(&inputs[..split]).and_then(|mut a| {
+            load(&inputs[split + 1..]).and_then(|mut b| report::compare(&mut a, &mut b, &entries))
+        });
+        if let Err(e) = res {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    let res = load(&inputs).and_then(|mut store| match cmd {
+        "names" => report::names(&mut store),
+        "applet-roundtrip" => applet_roundtrip(&store),
+        "manifest" => report::manifest(&mut store, &label, &entries),
         "dump" => {
             dump(&mut store);
             Ok(())

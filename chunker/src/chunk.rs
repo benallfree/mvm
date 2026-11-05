@@ -5,6 +5,7 @@
 //! target either by symbol name (named chunks: functions, statics) or by the
 //! target's content hash (anonymous chunks: literals, jump tables, string pieces).
 
+use crate::stable::stable_name;
 use object::elf;
 use object::read::elf::{ElfFile32, FileHeader, SectionHeader};
 use object::{
@@ -77,6 +78,8 @@ pub struct Report {
     pub pcrel_pairs: usize,
     pub string_pieces: usize,
     pub skipped_sections: Vec<String>,
+    /// crate -> (v0 names, plain names) it defines.
+    pub names: BTreeMap<String, (usize, usize)>,
 }
 
 #[derive(Default)]
@@ -85,6 +88,8 @@ pub struct Store {
     pub by_name: BTreeMap<String, usize>,
     pub report: Report,
     pub missing: Vec<String>,
+    /// stable name -> the raw symbol it came from.
+    pub raw_of: BTreeMap<String, String>,
     hashes: Vec<Option<Hash>>,
 }
 
@@ -252,8 +257,8 @@ impl Store {
             if matches!(sym.kind(), SymbolKind::Section | SymbolKind::File) {
                 continue;
             }
-            let name = sym.name().map_err(|e| e.to_string())?;
-            if is_label(name) {
+            let raw = sym.name().map_err(|e| e.to_string())?;
+            if is_label(raw) {
                 continue;
             }
             if let SymbolSection::Section(si) = sym.section() {
@@ -261,13 +266,21 @@ impl Store {
                     continue;
                 }
                 let (ci, off) = locate(&pieces, si, sym.address() as i64)?;
+                let name = &self.intern(label, raw)?;
                 if off != 0 {
                     return Err(format!("{label}: symbol {name} at +{off} inside a chunk"));
                 }
                 if self.by_name.insert(name.to_string(), ci).is_some() {
-                    return Err(format!("{label}: duplicate symbol {name}"));
+                    return Err(format!("{label}: duplicate symbol {raw}"));
                 }
                 self.chunks[ci].names.push(name.to_string());
+                let krate = label.split(['-', '.']).next().unwrap_or(label).to_string();
+                let e = self.report.names.entry(krate).or_default();
+                if raw.starts_with("_R") {
+                    e.0 += 1
+                } else {
+                    e.1 += 1
+                }
             }
         }
 
@@ -335,7 +348,9 @@ impl Store {
                             (Target::Chunk(tci), toff)
                         }
                         SymbolSection::Undefined => (
-                            Target::Extern(sym.name().map_err(|e| e.to_string())?.to_string()),
+                            Target::Extern(
+                                self.intern(label, sym.name().map_err(|e| e.to_string())?)?,
+                            ),
                             addend,
                         ),
                         other => return Err(format!("{label}: symbol in {other:?} not handled")),
@@ -373,6 +388,23 @@ impl Store {
             }
         }
         Ok(())
+    }
+
+    /// Map a raw symbol to its stable name. Two raw names with one stable name is fatal.
+    fn intern(&mut self, label: &str, raw: &str) -> Result<String> {
+        let st = stable_name(raw)?;
+        match self.raw_of.get(&st) {
+            Some(prev) if prev != raw => {
+                return Err(format!(
+                    "{label}: stable name collision: {st}\n  {prev}\n  {raw}"
+                ));
+            }
+            Some(_) => {}
+            None => {
+                self.raw_of.insert(st.clone(), raw.to_string());
+            }
+        }
+        Ok(st)
     }
 
     fn push(
@@ -510,7 +542,7 @@ pub fn hex(h: &Hash) -> String {
 
 pub fn display_name(c: &Chunk) -> String {
     match c.names.first() {
-        Some(n) => format!("{:#}", rustc_demangle::demangle(n)),
+        Some(n) => n.clone(),
         None => "(anon)".to_string(),
     }
 }

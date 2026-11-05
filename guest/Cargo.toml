@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["testcrate", "helper"]
+members = ["testcrate", "helper", "applet"]
 
 [profile.release]
 panic = "abort"
 codegen-units = 1
-lto = "off"
+lto = "off"  # pinned for chunked builds; build.sh LTO=fat is measurement only
