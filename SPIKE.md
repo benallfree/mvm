@@ -15,6 +15,8 @@ Thumb; the simple loop is 90–148x. Details are in SPEED_SPIKE.md and `bench/RE
 **Round four** (`spike-aot`) adds `bench/aot`, an RV32IMC → Thumb-2 ahead-of-time
 translator. Its output is position independent and comes within 1.98x (crc16) and
 3.34x (parse) of native.
+**Round five** (`spike-interp-opt`) adds `bench/interp/src/fast.rs`, an optimised
+interpreter at 39x (crc16) and 26x (parse), down from 77x and 51x pre-decoded.
 
 ## Layout
 

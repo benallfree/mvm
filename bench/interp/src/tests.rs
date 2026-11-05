@@ -88,3 +88,49 @@ fn predecoded_matches_native() {
     }
     assert_eq!(native(img::CRC16, b"123456789"), 0x29B1);
 }
+
+#[test]
+fn fast_matches_native() {
+    for (name, entry, data) in cases() {
+        let mut ram = vec![0u8; 8192];
+        ram[..data.len()].copy_from_slice(&data);
+        let mut mem = Mem {
+            image: &img::IMAGE,
+            image_base: img::BASE,
+            ram: &mut ram,
+            ram_base: RAM_BASE,
+        };
+        let mut table = vec![fast::E::EMPTY; img::IMAGE_LEN / 2];
+        for pass in ["cold", "warm"] {
+            let mut cpu = fast::Cpu::new();
+            let got = cpu
+                .call(&mut mem, &mut table, entry, &[RAM_BASE, data.len() as u32])
+                .unwrap();
+            assert_eq!(got, native(entry, &data), "{name} {pass}");
+            #[cfg(feature = "count")]
+            println!(
+                "fast {pass} {name}: {got:#x}, {} guest instructions",
+                cpu.steps
+            );
+        }
+    }
+}
+
+#[test]
+fn fast_rejects_bad_targets() {
+    let mut ram = vec![0u8; 64];
+    let mut mem = Mem {
+        image: &img::IMAGE,
+        image_base: img::BASE,
+        ram: &mut ram,
+        ram_base: RAM_BASE,
+    };
+    let mut table = vec![fast::E::EMPTY; img::IMAGE_LEN / 2];
+    let mut cpu = fast::Cpu::new();
+    // Outside the image, odd, and a wrong-sized table are all faults, not UB.
+    assert!(cpu.call(&mut mem, &mut table, 0x10, &[]).is_err());
+    assert!(cpu.call(&mut mem, &mut table, img::CRC16 + 1, &[]).is_err());
+    assert!(cpu
+        .call(&mut mem, &mut table[..10], img::CRC16, &[])
+        .is_err());
+}

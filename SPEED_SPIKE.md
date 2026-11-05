@@ -6,7 +6,8 @@ guest code through a small RAM cache add on top of that?
 
 **Status:**
 - **Built:** the interpreter, the workloads and a cycle *estimate* (round three), plus
-  an ahead-of-time translator compared four ways (round four).
+  an ahead-of-time translator compared four ways (round four), plus an optimised
+  interpreter (round five).
 - **Not built:** the board run (phase 1 on hardware) and phase 2.
 
 ## Estimate without hardware (round three)
@@ -133,6 +134,69 @@ How phases are assigned:
 - **Power and energy** per guest instruction and per packet.
 - **Unicorn's own correctness** as an execution model. Its results match native
   here, but it isn't cycle accurate. The cost table supplies the timing.
+
+## Round five: an optimised interpreter
+
+`bench/interp/src/fast.rs` is a third interpreter. It is still a plain `match`
+loop in safe Rust, plus one `get_unchecked` whose invariant the decoder proves.
+It removes the costs round three measured. Same harness, cost table and inputs.
+
+| Workload | Native | AOT | **Fast interp** | Pre-decoded | Simple |
+|---|---|---|---|---|---|
+| crc16 (256 B) | 2092 | 4134 (1.98x) | **82,237 (39x)** | 162,110 (77x) | 309,795 (148x) |
+| parse (64 B) | 778 | 2595 (3.34x) | **20,257 (26x)** | 39,747 (51x) | 70,099 (90x) |
+
+| Interpreter | Host instrs / guest instr | Cycles / guest instr | Table RAM for this image |
+|---|---|---|---|
+| simple | 71–78 | 100–110 | none |
+| pre-decoded | 33–34 | 57 | 5.5 KB (12 B × 456) |
+| **fast** | **17** | **29** | **3.6 KB (8 B × 456)** |
+
+- **Correctness:** `fast` matches native on all 5 inputs, warm and cold.
+- **Bad entry points:** an entry outside the image, an odd entry, and a wrongly sized
+  table are rejected as faults (tested), so the `get_unchecked` path is never reached
+  with a bad index.
+- **Cold runs:** crc16 41x; parse 47x, because parse runs most of its instructions
+  only once, so decoding dominates.
+- **Against the 30x target:** parse now meets it, and crc16 doesn't. crc16 still
+  carries the 2x instruction-count penalty RV32 has against Thumb here.
+
+### What changed, and what each step bought
+
+| Step | crc16 | parse |
+|---|---|---|
+| pre-decoded (round three) | 77x | 51x |
+| pc as a table index with in-range targets proved at decode; no per-instruction exit test; `Undecoded` as its own op; operands read only where used; `li` / `mv` / `beqz` / `bnez` forms | 46x | 31x |
+| entries packed into 8 bytes (one `ldrd` + bit-field extracts instead of 6 byte loads; register indices come out masked) | **39x** | **26x** |
+
+### Where the remaining 29 cycles per guest instruction go (crc16, exact)
+
+| Instruction class | Cycles / guest instr |
+|---|---|
+| ALU: field extraction, next-ip, the operation itself | 9.9 |
+| unconditional `b`: arm → shared tail → loop head | **5.7** |
+| `TBH` dispatch | 4.0 |
+| loads: register file and guest memory | 3.8 |
+| `ldrd`: entry fetch | 3.1 |
+| stores to the register file | 1.8 |
+| other | 0.7 |
+
+The hot header is three instructions, `ldrd`, `uxtb` and `tbh`, for 8 cycles. Each
+arm then jumps to a shared tail, which writes `rd`, advances `ip` and jumps back:
+two taken branches per guest instruction. Phase labels blur here, because the
+compiler moves field extraction into the arms; the class table is exact.
+
+### Next step if the interpreter has to go further
+
+**Threaded dispatch:** repeat the header at the end of every arm and drop both
+unconditional branches.
+- **Expected gain:** about 6 cycles of the 29 per guest instruction, so roughly 31x
+  on crc16 and 21x on parse.
+- **The catch:** stable Rust can't express it in a `match` loop. It needs `become`
+  tail calls (nightly) or a small assembly dispatcher.
+- **Beyond that:** the remaining costs are the in-memory register file and the
+  instruction-count gap to Thumb. Only translation removes those, and that's what
+  AOT's 2–3.3x shows.
 
 ## Round four: ahead-of-time translation to Thumb (same emulator, CPU only)
 

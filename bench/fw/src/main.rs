@@ -4,7 +4,7 @@
 #![no_main]
 
 use core::ptr::addr_of_mut;
-use interp::{pd, simple, Mem};
+use interp::{fast, pd, simple, Mem};
 use kernels::inputs::{CRC_DATA, PACKET};
 
 mod img {
@@ -21,6 +21,7 @@ const CRC_AT: u32 = GUEST_RAM;
 const PKT_AT: u32 = GUEST_RAM + 256;
 static mut GRAM: [u8; 4096] = [0; 4096];
 static mut TABLE: [pd::D; img::IMAGE_LEN / 2] = [pd::D::EMPTY; img::IMAGE_LEN / 2];
+static mut FTABLE: [fast::E; img::IMAGE_LEN / 2] = [fast::E::EMPTY; img::IMAGE_LEN / 2];
 
 fn mem() -> Mem<'static> {
     Mem {
@@ -35,6 +36,10 @@ fn table() -> &'static mut [pd::D] {
     unsafe { &mut *addr_of_mut!(TABLE) }
 }
 
+fn ftable() -> &'static mut [fast::E] {
+    unsafe { &mut *addr_of_mut!(FTABLE) }
+}
+
 /// Copy inputs into guest RAM and clear the pre-decode table. Not timed.
 #[no_mangle]
 pub extern "C" fn bench_setup() {
@@ -42,6 +47,7 @@ pub extern "C" fn bench_setup() {
     m.ram[..256].copy_from_slice(&CRC_IN);
     m.ram[256..320].copy_from_slice(&PKT_IN);
     table().fill(pd::D::EMPTY);
+    ftable().fill(fast::E::EMPTY);
 }
 
 #[no_mangle]
@@ -85,4 +91,18 @@ pub extern "C" fn bench_pd_parse() -> u32 {
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
+}
+
+#[no_mangle]
+pub extern "C" fn bench_fast_crc16() -> u32 {
+    fast::Cpu::new()
+        .call(&mut mem(), ftable(), img::CRC16, &[CRC_AT, 256])
+        .unwrap_or(0xdead_0000)
+}
+
+#[no_mangle]
+pub extern "C" fn bench_fast_parse() -> u32 {
+    fast::Cpu::new()
+        .call(&mut mem(), ftable(), img::PARSE, &[PKT_AT, 64])
+        .unwrap_or(0xdead_0000)
 }

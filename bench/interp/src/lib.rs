@@ -11,6 +11,7 @@
 //! phase whose marker is the closest one above that line.
 #![no_std]
 
+pub mod fast;
 pub mod pd;
 pub mod simple;
 
