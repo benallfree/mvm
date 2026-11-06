@@ -6,5 +6,43 @@ machine LoadPlatformDescription @platforms/cpus/nrf52840.repl
 machine LoadPlatformDescriptionFromString "dwt: Miscellaneous.DWT @ sysbus 0xE0001000 { frequency: 64000000 }"
 sysbus LoadELF $elf
 uart0 CreateFileBackend $uartlog true
-emulation RunFor "10"
+
+# Round 7d, test 30: when the firmware says it's ready, act like a person:
+# press the button (a real edge on P0.03, seen through GPIOTE) after 100 ms,
+# then type a packet on the UART ("P<text>") after 300 ms.
+python """
+import Antmicro.Renode.Hooks.UartHooksExtensions
+clr.ImportExtensions(Antmicro.Renode.Hooks.UartHooksExtensions)
+from Antmicro.Renode.Time import TimeInterval
+from System import Action
+machine = monitor.Machine
+uart = machine['sysbus.uart0']
+gpio = machine['sysbus.gpio0']
+
+def type_line(s):
+    for c in s + chr(10):
+        uart.WriteChar(ord(c))
+
+def press(t):
+    print "script: button down"
+    gpio.OnGPIO(3, True)
+
+def release(t):
+    gpio.OnGPIO(3, False)
+
+def packet(t):
+    print "script: typing a packet"
+    type_line('Pscript')
+
+def on_ready(line):
+    print "script: ready seen, scheduling inputs"
+    machine.ScheduleAction(TimeInterval.FromMilliseconds(100), Action[TimeInterval](press))
+    machine.ScheduleAction(TimeInterval.FromMilliseconds(120), Action[TimeInterval](release))
+    machine.ScheduleAction(TimeInterval.FromMilliseconds(300), Action[TimeInterval](packet))
+
+uart.AddLineHook(lambda line: 'MO script-ready' in line, on_ready)
+print "script: hook installed on", uart
+"""
+
+emulation RunFor "25"
 quit

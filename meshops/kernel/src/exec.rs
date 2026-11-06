@@ -27,10 +27,11 @@ pub const BACKLOG: usize = 4;
 /// "No task": tickets made outside a poll (init, a host call) wake nobody.
 pub const NO_TASK: u8 = 0xFF;
 /// Default `init`/`poll` budget, in control transfers (jumps and branches):
-/// roughly 100,000 guest instructions, about 45 ms of interpreted code on a
-/// 64 MHz Cortex-M4. A poll should take microseconds; this only catches
-/// runaways.
-pub const DEFAULT_BUDGET: u32 = 20_000;
+/// roughly 10,000 guest instructions, about 5 ms of interpreted code on a
+/// 64 MHz Cortex-M4. That is also how late a runaway can make every other
+/// applet (there is one interpreter): round 7d first tried 20,000 (~47 ms),
+/// and test 25 showed the other applet's ticks slipping by that much.
+pub const DEFAULT_BUDGET: u32 = 2_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TState {

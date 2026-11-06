@@ -27,20 +27,22 @@ step "nrf52840: build (Embassy, thumbv7em-none-eabihf)"
 step "nrf52840: run under Renode"
 rm -f "$OUT/nrf52840.uart"
 ELF="$HERE/nrf52840/target/thumbv7em-none-eabihf/release/mvm-emu-nrf52840"
-timeout 120 "$RENODE" --disable-gui --console --plain \
+timeout 900 "$RENODE" --disable-gui --console --plain \
   -e "\$elf=@$ELF; \$uartlog=@$OUT/nrf52840.uart; include @$HERE/nrf52840/run.resc" > "$OUT/nrf52840.renode.log" 2>&1
 
-step "esp32s3: build (esp-hal, Xtensa Rust esp197)"
+step "esp32s3: build (esp-hal + esp-rtos, Xtensa Rust esp197)"
 (cd "$HERE/esp32s3" && cargo build -q --release) || exit 1
 espflash save-image --chip esp32s3 --merge \
   "$HERE/esp32s3/target/xtensa-esp32s3-none-elf/release/mvm-emu-esp32s3" "$OUT/esp32s3-flash.bin" > "$OUT/espflash.log" 2>&1 || exit 1
 step "esp32s3: run under QEMU (-icount shift=0)"
 rm -f "$OUT/esp32s3.uart"
+# UART0 is a TCP socket: qemu_serial.py logs it and types the test-30 script.
+PORT=5555
 "$QEMU" -nographic -machine esp32s3 -icount shift=0 \
   -drive file="$OUT/esp32s3-flash.bin",if=mtd,format=raw \
-  -serial file:"$OUT/esp32s3.uart" -monitor none -no-reboot > "$OUT/esp32s3.qemu.log" 2>&1 &
+  -serial tcp:127.0.0.1:$PORT,server=on,wait=on -monitor none -no-reboot > "$OUT/esp32s3.qemu.log" 2>&1 &
 QPID=$!
-for _ in $(seq 1 240); do grep -q 'MO esp32s3 done' "$OUT/esp32s3.uart" 2>/dev/null && break; sleep 0.5; done
+python3 "$HERE/qemu_serial.py" $PORT "$OUT/esp32s3.uart" "MO esp32s3 async-done" 1500
 kill $QPID 2>/dev/null; wait $QPID 2>/dev/null
 
 echo
@@ -64,7 +66,7 @@ echo "cycles: emulator counts, not cycle-accurate (sanity check only)"
 echo
 printf '%-9s %-24s %-5s %s\n' chip test ok detail
 for chip in nrf52840 esp32s3; do
-  for t in load 1-hello 2-timer 3-nop-cost 4-applet-op 5-nested 6-missing-import 7-swap 8-spoof 9-position-independence 10-instances 11-real-pointers 12-shared-stack 13-fit 14-big-buffer 15-overflow-spill 16-bulk-position-independence 17-bulk-real-pointer 18-bulk-fit 19-no-annotations done; do
+  for t in load 1-hello 2-timer 3-nop-cost 4-applet-op 5-nested 6-missing-import 7-swap 8-spoof 9-position-independence 10-instances 11-real-pointers 12-shared-stack 13-fit 14-big-buffer 15-overflow-spill 16-bulk-position-independence 17-bulk-real-pointer 18-bulk-fit 19-no-annotations done async-load 20-hello-loop 21-two-tasks 22-two-applets 23-idle 24-no-deadlock 25-budget 26-stale-ticket 27-inbox-overflow 28-driver-priority 29-select async-costs async-sizes 30-script-inputs async-done; do
     line=$(grep -a "^MO $chip $t " "$OUT/$chip.uart" 2>/dev/null | head -1)
     if [ -z "$line" ]; then printf '%-9s %-24s %-5s\n' $chip $t FAIL; fail=1; continue; fi
     ok=FAIL; grep -q ' pass=1' <<<"$line" && ok=PASS
