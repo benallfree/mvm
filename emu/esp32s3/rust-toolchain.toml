@@ -1,0 +1,4 @@
+# Espressif's Xtensa Rust 1.97.0.0 (esp-rs/rust-build), linked locally as `esp197`
+# by emu/setup-tools.sh. 1.99.0.0 can't link esp-hal (see emu/RESULTS.md).
+[toolchain]
+channel = "esp197"

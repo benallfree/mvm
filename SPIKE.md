@@ -17,6 +17,9 @@ translator. Its output is position independent and comes within 1.98x (crc16) an
 3.34x (parse) of native.
 **Round five** (`spike-interp-opt`) adds `bench/interp/src/fast.rs`, an optimised
 interpreter at 39x (crc16) and 26x (parse), down from 77x and 51x pre-decoded.
+**Round six** (`spike-emu`) runs that same interpreter, unchanged, on an emulated
+nRF52840 (Renode, Embassy) and an emulated ESP32-S3 (Espressif QEMU, esp-hal).
+`emu/run.sh` runs both, and all 10 checks match native. See `emu/RESULTS.md`.
 
 ## Layout
 
@@ -26,6 +29,7 @@ interpreter at 39x (crc16) and 26x (parse), down from 77x and 51x pre-decoded.
 | `guest/build.sh` | The builder. It pins the flags, emits `.o`, and prints the chunker inputs. Env: `PKG`, `CODE_MODEL=small\|medium`, `BUILD_STD=1`, and `LTO=fat` (measurement only). |
 | `chunker/` | The host tool. Commands: `dump`, `hashes`, `roundtrip`, `applet-roundtrip`, `names`, `manifest`, `compare`, `link` (writes a flat image and entry addresses to disk) |
 | `guest/kernels` | Speed-spike workloads: `crc16` and `parse` |
+| `emu/` | Round six: `bench-core` (shared firmware body), `nrf52840` (Embassy, Renode), `esp32s3` (esp-hal, QEMU), `setup-tools.sh`, `run.sh` |
 | `bench/` | Speed spike: `interp` (no_std simple and pre-decoded RV32IMC interpreters), `aot` (RV32IMC → Thumb-2 translator), `fw` (Thumb firmware for Unicorn), `harness/` (Unicorn and the M4 cost model), `run.sh` |
 | `check.sh` | Every check, for both code models, plus the applet |
 

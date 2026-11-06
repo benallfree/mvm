@@ -1,0 +1,10 @@
+[package]
+name = "mvm-emu-expected"
+version = "0.1.0"
+edition = "2021"
+
+# Host program: prints the native (x86) result for each case, which the
+# emulator runs are checked against.
+[dependencies]
+bench-core = { path = "../bench-core" }
+kernels = { path = "../../guest/kernels" }

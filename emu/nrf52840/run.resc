@@ -1,0 +1,10 @@
+# Headless Renode run: nRF52840, firmware ELF in $elf, UART0 captured to $uartlog.
+mach create "nrf52840"
+machine LoadPlatformDescription @platforms/cpus/nrf52840.repl
+# The stock nRF52840 description has no DWT; add Renode's model so CYCCNT counts.
+# It derives cycles from emulated time, not from a pipeline model.
+machine LoadPlatformDescriptionFromString "dwt: Miscellaneous.DWT @ sysbus 0xE0001000 { frequency: 64000000 }"
+sysbus LoadELF $elf
+uart0 CreateFileBackend $uartlog true
+emulation RunFor "3"
+quit

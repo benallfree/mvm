@@ -1,0 +1,10 @@
+[package]
+name = "bench-core"
+version = "0.1.0"
+edition = "2021"
+
+# Shared by every chip firmware: runs the 5 inputs through the `fast`
+# interpreter and through native code, and prints one line per input.
+[dependencies]
+interp = { path = "../../bench/interp" }
+kernels = { path = "../../guest/kernels" }
