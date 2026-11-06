@@ -35,12 +35,12 @@ Each figure is the extra cost of one call over the same loop without it, so loop
 
 | Call | x86 host | ×guest | Unicorn (Cortex-M4 cost table) | ×guest | Renode nRF52840 | ×guest | QEMU ESP32-S3 | ×guest |
 |---|---|---|---|---|---|---|---|---|
-| kernel.nop.v1 | 3 | 1.3 | 215 | 7.3 | 60 | 5.3 | 4 | 3.3 |
-| kernel.uart.write.v1 (16 B, console muted) | 4 | 1.8 | 331 | 11.2 | 99 | 8.7 | 7 | 5.1 |
-| applet op test.echo.v1 (len 0, A's work ~1 instr) | 7 | 2.9 | 599 | 20.2 | 196 | 17.2 | 15 | 11.8 |
-| each extra nesting level (test.recurse.v1) | 78 | 34.3 | 1459 | 49.3 | 534 | 46.8 | 55 | 42.3 |
-| host -> guest entry (Kernel::call, empty body) | 14 | 5.9 | 467 | 15.8 | 161 | 14.1 | 14 | 11.0 |
-| *one interpreted guest instruction* | 2.3 | 1 | 29.6 | 1 | 11.4 | 1 | 1.3 | 1 |
+| kernel.nop.v1 | 3 | 1.1 | 215 | 7.3 | 60 | 5.3 | 4 | 3.3 |
+| kernel.uart.write.v1 (16 B, console muted) | 10 | 4.3 | 331 | 11.2 | 99 | 8.7 | 7 | 5.1 |
+| applet op test.echo.v1 (len 0, A's work ~1 instr) | 5 | 2.2 | 599 | 20.2 | 196 | 17.2 | 15 | 11.8 |
+| each extra nesting level (test.recurse.v1) | 88 | 36.7 | 1459 | 49.3 | 534 | 46.8 | 55 | 42.3 |
+| host -> guest entry (Kernel::call, empty body) | 15 | 6.4 | 467 | 15.8 | 161 | 14.1 | 14 | 11.0 |
+| *one interpreted guest instruction* | 2.4 | 1 | 29.6 | 1 | 11.4 | 1 | 1.3 | 1 |
 
 Units: x86 host: ns (wall clock); Unicorn (Cortex-M4 cost table): est. M4 cycles; Renode nRF52840: DWT units (= instrs x 0.64); QEMU ESP32-S3: CCOUNT under -icount.
 
@@ -63,9 +63,9 @@ One read-modify-write (`x += 1`) of a `u32` static in a non-inlined function, ca
 
 | Target | gp-window static | ×guest | bulk static | ×guest | bulk extra |
 |---|---|---|---|---|---|
-| x86 host | 9.4 | 4.13 | 8.1 | 3.55 | -1.3 (-0.58 ×guest) |
+| x86 host | 6.7 | 2.81 | 7.8 | 3.23 | +1.0 (+0.42 ×guest) |
 | Unicorn (Cortex-M4 cost table) | 121.8 | 4.11 | 142.8 | 4.82 | +21.0 (+0.71 ×guest) |
-| Renode nRF52840 | 46.8 | 4.10 | 55.1 | 4.82 | +8.3 (+0.73 ×guest) |
+| Renode nRF52840 | 46.8 | 4.09 | 55.1 | 4.82 | +8.3 (+0.73 ×guest) |
 | QEMU ESP32-S3 | 5.6 | 4.32 | 6.5 | 4.99 | +0.9 (+0.68 ×guest) |
 
 Units as in the call-cost table. The host figure is wall-clock ns, so its small differences are noise.
@@ -123,7 +123,7 @@ Code size per link across thresholds: applet D: 1016 B, applet E: 1936 B, kernel
 - Registry entry: **32 B** on Thumb (8 B hash, 8 B name slice into the applet image, the provider, 4 B reserved hook range, enum/Option padding); 48 B on x86-64.
 - Whole registry (32 entries + 64-bucket index): **1160 B** on Thumb.
 - Per-applet record: **56 B** (16 import slots × 2 B, slot count, code region, gp window and bulk addresses and lengths, gp).
-- Loading H, A and B (11 imports, 3 exports): x86 host 3786 per applet, Unicorn (Cortex-M4 cost table) 9066 per applet, Renode nRF52840 3172 per applet, QEMU ESP32-S3 183 per applet.
+- Loading H, A and B (11 imports, 3 exports): x86 host 3858 per applet, Unicorn (Cortex-M4 cost table) 9066 per applet, Renode nRF52840 3172 per applet, QEMU ESP32-S3 183 per applet.
 - Host stack per nesting level: **232 B** on Thumb (`run_guest`'s frame; round seven 464 B). Deepest host stack in the whole Unicorn run (includes 7 nested levels): 34500 B.
 
 ## Memory model (7b)
@@ -132,12 +132,12 @@ Code size per link across thresholds: applet D: 1016 B, applet E: 1936 B, kernel
 - Shared stack per level on each target: x86 host 48 B, Unicorn (Cortex-M4 cost table) 48 B, Renode nRF52840 48 B, QEMU ESP32-S3 48 B.
 - Register files: 8 (one per nesting level) × 256 B, owned by the kernel and reused, not cleared, per call.
 - Fit check: `free=49068 result=Err(NoRoom { need: 49100, free: 49068 })`.
-- Position independence: `flash=0x347b0,0x346d0 ram=0x2000220c,0x20002228 image_fnv=0x75b8426eb689f7cb identical=1 gp_accesses=5 abs_ptrs=2`.
+- Position independence: `flash=0x347a0,0x346c0 ram=0x2000220c,0x20002228 image_fnv=0x75b8426eb689f7cb identical=1 gp_accesses=5 abs_ptrs=2`.
 - Two instances: `same_flash=1 blocks=0x2000220c,0x20002244 counts=Ok(3),Ok(1)`.
 - Real pointers: `ptr=Ok(536879652) block+off=0x20002224 owner=Ok(7) real=1 direct_read=Some(3)`.
 - Big buffer (7c): `sum=Ok(3258446222) want=0xc237f18e squares=Ok(2032336) corners=Ok(1249809) tail=Ok(12) ptrs=Ok(1) relocs=65 gp=36 bulk=17280 slots=5 gp_acc=7 bulk_acc=14`.
 - Spill (7c): `statics=41 bytes=5124 spilled=9 gp=3976 bulk=1152 init=Ok(12800) after=Ok(2098560)`.
-- Bulk position independence (7c): `flash=0x35010,0x34900 gp=0x20002260,0x20007a0c bulk=0x20002284,0x20007a30 image_fnv=0x4c1b5317a95096e6 identical=1 sums=Ok(1138288586),Ok(1853652284) want_b=0x6e7c7d3c fills=Ok(1),Ok(2)`.
+- Bulk position independence (7c): `flash=0x35000,0x348f0 gp=0x20002260,0x20007a0c bulk=0x20002284,0x20007a30 image_fnv=0x4c1b5317a95096e6 identical=1 sums=Ok(1138288586),Ok(1853652284) want_b=0x6e7c7d3c fills=Ok(1),Ok(2)`.
 - Bulk real pointer (7c): `ptr=Ok(536880408) bulk+off=0x20002518 owner=Ok(11) kernel_sum=Ok(3437933547) guest_sum=Ok(3437933547) real=1 direct_read=Some(1111445205)`.
 - Bulk fit (7c): `free=9308 bulk=9309 result=Err(NoRoom { need: 9345, free: 9308 })`.
 - No annotations (7c): `plain_statics=49 annotated=0`.
