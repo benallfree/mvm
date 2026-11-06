@@ -32,6 +32,7 @@ pub mod h {
     pub const STATICS: usize = 0;
     pub const STATIC_BYTES: u32 = 0;
     pub const BULK_STATICS: usize = 0;
+    pub const PROMOTED: usize = 0;
     pub const SPILLED: usize = 0;
 }
 pub mod a {
@@ -57,6 +58,7 @@ pub mod a {
     pub const STATICS: usize = 0;
     pub const STATIC_BYTES: u32 = 0;
     pub const BULK_STATICS: usize = 0;
+    pub const PROMOTED: usize = 0;
     pub const SPILLED: usize = 0;
 }
 pub mod a2 {
@@ -82,6 +84,7 @@ pub mod a2 {
     pub const STATICS: usize = 0;
     pub const STATIC_BYTES: u32 = 0;
     pub const BULK_STATICS: usize = 0;
+    pub const PROMOTED: usize = 0;
     pub const SPILLED: usize = 0;
 }
 pub mod b {
@@ -112,6 +115,7 @@ pub mod b {
     pub const STATICS: usize = 0;
     pub const STATIC_BYTES: u32 = 0;
     pub const BULK_STATICS: usize = 0;
+    pub const PROMOTED: usize = 0;
     pub const SPILLED: usize = 0;
 }
 pub mod m {
@@ -138,6 +142,7 @@ pub mod m {
     pub const STATICS: usize = 0;
     pub const STATIC_BYTES: u32 = 0;
     pub const BULK_STATICS: usize = 0;
+    pub const PROMOTED: usize = 0;
     pub const SPILLED: usize = 0;
 }
 pub mod s1 {
@@ -163,6 +168,7 @@ pub mod s1 {
     pub const STATICS: usize = 0;
     pub const STATIC_BYTES: u32 = 0;
     pub const BULK_STATICS: usize = 0;
+    pub const PROMOTED: usize = 0;
     pub const SPILLED: usize = 0;
 }
 pub mod s2 {
@@ -188,6 +194,7 @@ pub mod s2 {
     pub const STATICS: usize = 0;
     pub const STATIC_BYTES: u32 = 0;
     pub const BULK_STATICS: usize = 0;
+    pub const PROMOTED: usize = 0;
     pub const SPILLED: usize = 0;
 }
 pub mod s3 {
@@ -213,6 +220,7 @@ pub mod s3 {
     pub const STATICS: usize = 0;
     pub const STATIC_BYTES: u32 = 0;
     pub const BULK_STATICS: usize = 0;
+    pub const PROMOTED: usize = 0;
     pub const SPILLED: usize = 0;
 }
 pub mod c {
@@ -246,22 +254,23 @@ pub mod c {
     pub const STATICS: usize = 3;
     pub const STATIC_BYTES: u32 = 28;
     pub const BULK_STATICS: usize = 0;
+    pub const PROMOTED: usize = 0;
     pub const SPILLED: usize = 0;
 }
 pub mod d {
     use super::*;
-    pub static IMAGE: Img<928> = Img(*include_bytes!("d.bin"));
+    pub static IMAGE: Img<1016> = Img(*include_bytes!("d.bin"));
     /// A second copy of the same bytes at another flash address.
-    pub static IMAGE_COPY: Img<928> = Img(*include_bytes!("d.bin"));
-    pub static GP_INIT: [u8; 24] = *include_bytes!("d.static");
-    pub static BULK_INIT: [u8; 384] = *include_bytes!("d.bulk");
+    pub static IMAGE_COPY: Img<1016> = Img(*include_bytes!("d.bin"));
+    pub static GP_INIT: [u8; 28] = *include_bytes!("d.static");
+    pub static BULK_INIT: [u8; 640] = *include_bytes!("d.bulk");
     pub static IMPORTS: [Import; 2] = [Import { hash: 0x2cb72404d6d66af1, name: "kernel.mem.sum.v1" }, Import { hash: 0x79be3e3eca015931, name: "kernel.mem.owner.v1" }];
     pub static EXPORTS: [Export; 0] = [];
-    pub static DATA_RELOCS: [DataReloc; 0] = [];
+    pub static DATA_RELOCS: [DataReloc; 65] = [DataReloc { seg: Seg::Gp, at: 24, to: Seg::Bulk, off: 640 }, DataReloc { seg: Seg::Bulk, at: 384, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 388, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 392, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 396, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 400, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 404, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 408, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 412, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 416, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 420, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 424, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 428, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 432, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 436, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 440, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 444, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 448, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 452, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 456, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 460, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 464, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 468, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 472, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 476, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 480, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 484, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 488, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 492, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 496, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 500, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 504, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 508, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 512, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 516, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 520, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 524, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 528, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 532, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 536, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 540, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 544, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 548, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 552, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 556, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 560, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 564, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 568, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 572, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 576, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 580, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 584, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 588, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 592, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 596, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 600, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 604, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 608, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 612, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 616, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 620, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 624, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 628, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 632, to: Seg::Gp, off: 28 }, DataReloc { seg: Seg::Bulk, at: 636, to: Seg::Gp, off: 28 }];
     pub static MANIFEST: Manifest = Manifest {
         image: &IMAGE.0,
-        gp: Segment { size: 32, align: 4, init: &GP_INIT },
-        bulk: Segment { size: 17024, align: 4, init: &BULK_INIT },
+        gp: Segment { size: 36, align: 4, init: &GP_INIT },
+        bulk: Segment { size: 17280, align: 4, init: &BULK_INIT },
         bulk_slots: 5,
         data_relocs: &DATA_RELOCS,
         imports: &IMPORTS,
@@ -275,28 +284,35 @@ pub mod d {
     pub const SQUARES_SUM: u32 = 210;
     pub const BUMP: u32 = 236;
     pub const TAIL: u32 = 294;
-    pub const CORNERS_SET: u32 = 666;
-    pub const CORNERS_GET: u32 = 704;
-    pub const GP_LOOP: u32 = 744;
-    pub const BULK_LOOP: u32 = 782;
-    pub const NONE_LOOP: u32 = 820;
+    pub const PTRS_OK: u32 = 666;
+    pub const PTR_SET: u32 = 728;
+    pub const CORNERS_SET: u32 = 754;
+    pub const CORNERS_GET: u32 = 792;
+    pub const GP_LOOP: u32 = 832;
+    pub const BULK_LOOP: u32 = 870;
+    pub const NONE_LOOP: u32 = 908;
     pub const ABS_FLASH_POINTERS: usize = 2;
-    pub const GP_REWRITES: usize = 4;
-    pub const BULK_REWRITES: usize = 11;
-    pub const STATICS: usize = 6;
-    pub const STATIC_BYTES: u32 = 17036;
-    pub const BULK_STATICS: usize = 3;
+    pub const GP_REWRITES: usize = 7;
+    pub const BULK_REWRITES: usize = 14;
+    pub const STATICS: usize = 8;
+    pub const STATIC_BYTES: u32 = 17296;
+    pub const BULK_STATICS: usize = 4;
+    pub const PROMOTED: usize = 1;
     pub const SPILLED: usize = 0;
     pub const WORDS_IN_BULK: bool = true;
-    pub const WORDS_OFF: u32 = 384;
+    pub const WORDS_OFF: u32 = 640;
     pub const FILLS_IN_BULK: bool = false;
-    pub const FILLS_OFF: u32 = 24;
+    pub const FILLS_OFF: u32 = 28;
     pub const SQUARES_IN_BULK: bool = true;
     pub const SQUARES_OFF: u32 = 0;
     pub const SEED_IN_BULK: bool = false;
     pub const SEED_OFF: u32 = 20;
     pub const TAIL_IN_BULK: bool = true;
-    pub const TAIL_OFF: u32 = 16768;
+    pub const TAIL_OFF: u32 = 17024;
+    pub const FILLS_PTRS_IN_BULK: bool = true;
+    pub const FILLS_PTRS_OFF: u32 = 384;
+    pub const WORDS_PTR_IN_BULK: bool = false;
+    pub const WORDS_PTR_OFF: u32 = 24;
 }
 pub mod e {
     use super::*;
@@ -323,8 +339,9 @@ pub mod e {
     pub const STATICS: usize = 41;
     pub const STATIC_BYTES: u32 = 5124;
     pub const BULK_STATICS: usize = 9;
+    pub const PROMOTED: usize = 0;
     pub const SPILLED: usize = 9;
 }
 /// Test 7: writable statics in guest/applets/src/bulk.rs, all without attributes.
-pub const PLAIN_STATICS: usize = 47;
+pub const PLAIN_STATICS: usize = 49;
 pub const ANNOTATED_STATICS: usize = 0;

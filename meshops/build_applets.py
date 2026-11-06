@@ -36,13 +36,13 @@ APPLETS = [
     ("s2", [], "S2_EXPORTS", []),
     ("s3", [], None, []),
     ("c", ["c_inc", "c_addr", "c_owner", "c_table_sum", "c_print"], None, ["C_COUNT"]),
-    ("d", ["d_fill", "d_sum", "d_kernel_sum", "d_addr", "d_owner", "d_squares_sum", "d_bump", "d_tail", "d_corners_set",
+    ("d", ["d_fill", "d_sum", "d_kernel_sum", "d_addr", "d_owner", "d_squares_sum", "d_bump", "d_tail", "d_ptrs_ok", "d_ptr_set", "d_corners_set",
            "d_corners_get", "d_gp_loop", "d_bulk_loop", "d_none_loop"], None, []),
     ("e", ["e_sum", "e_fill"], None, []),
 ]
 # Ordinary (un-annotated, so mangled) statics whose placement the tests need:
 # (applet, const name, a substring of the mangled symbol).
-PLACED = [("d", "WORDS", "5WORDS"), ("d", "FILLS", "5FILLS"), ("d", "SQUARES", "7SQUARES"), ("d", "SEED", "4SEED"), ("d", "TAIL", "4TAIL")]
+PLACED = [("d", "WORDS", "5WORDS"), ("d", "FILLS", "5FILLS"), ("d", "SQUARES", "7SQUARES"), ("d", "SEED", "4SEED"), ("d", "TAIL", "4TAIL"), ("d", "FILLS_PTRS", "10FILLS_PTRS"), ("d", "WORDS_PTR", "9WORDS_PTR")]
 BULK_SRC = os.path.join(ROOT, "guest", "applets", "src", "bulk.rs")
 THRESHOLD = int(os.environ.get("BULK_THRESHOLD", "256"))
 
@@ -168,6 +168,7 @@ def main():
         rs.append(f"    pub const STATICS: usize = {len(placed)};")
         rs.append(f"    pub const STATIC_BYTES: u32 = {sum(p[1] for p in placed)};")
         rs.append(f"    pub const BULK_STATICS: usize = {nbulk};")
+        rs.append(f"    pub const PROMOTED: usize = {len(j['promoted'])};")
         rs.append(f"    pub const SPILLED: usize = {sum(1 for p in placed if p[4] == 'spill')};")
         for app, const, frag in PLACED:
             if app == name:

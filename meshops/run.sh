@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Round seven: mesh ops. Links the test applets, runs the shared tests on the
-# x86 host and under Unicorn (cycle estimate), then writes RESULTS.md, adding
-# the Renode/QEMU results from emu/out/ when emu/run.sh has run.
+# Rounds 7-7c: mesh ops. Links the test applets, runs the shared tests on the
+# x86 host and under Unicorn (cycle estimate), sweeps the bulk threshold, then
+# writes RESULTS.md, adding the Renode/QEMU results from emu/out/ when
+# emu/run.sh has run.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE"
@@ -15,5 +16,7 @@ echo "== Unicorn (Thumb + M4 cost table)"
 cargo build -q --release -p mvm-meshops-fw-unicorn --target thumbv7em-none-eabihf
 python3 run_unicorn.py target/thumbv7em-none-eabihf/release/fw out/unicorn.json > out/unicorn.txt
 grep '^MO unicorn .*pass=' out/unicorn.txt
+echo "== bulk threshold sweep"
+python3 threshold_sweep.py | tail -2
 echo "== report"
 python3 report.py > /dev/null && echo "wrote meshops/RESULTS.md" || { echo "FAILURES (see meshops/RESULTS.md)"; exit 1; }

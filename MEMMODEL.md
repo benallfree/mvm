@@ -53,10 +53,10 @@ shared stack and the fit check.
 - **Per mesh-op boundary:** none. Each nesting level has its own register file, so
   the callee's `gp` is set at entry and the caller's is still in its own file when
   control returns.
-- **Limit:** 4 KB of statics per applet (the 12-bit immediate reaches gp ± 2 KB). The
-  chunker refuses more with an error that points here. Every applet in this round
-  uses ≤ 28 B. Above 4 KB, a large array could be accessed through a pointer kept in a
-  static (one extra load per access).
+- **Limit:** 4 KB of statics per applet (the 12-bit immediate reaches gp ± 2 KB).
+  Every applet in this round uses ≤ 28 B. *Round 7c removes the limit: large statics
+  go to a bulk segment reached through slots in the gp window, chosen by the
+  chunker automatically. See [BULK.md](BULK.md).*
 
 **How this extends to third-party library statics** (out of scope, not built):
 - A library shared between applets can't use the "offset from my gp" trick for its

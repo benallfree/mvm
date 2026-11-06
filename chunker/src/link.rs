@@ -203,10 +203,41 @@ pub struct PicImage {
     pub gp_rewrites: usize,
     pub bulk_rewrites: usize,
     pub placed: Vec<Placed>,
+    /// Read-only chunks moved to RAM because they hold pointers to RAM.
+    pub promoted: Vec<String>,
 }
 
-fn is_static(store: &Store, ci: usize) -> bool {
-    matches!(store.chunks[ci].kind, crate::chunk::Kind::Data | crate::chunk::Kind::Bss)
+/// The chunks that live in RAM: writable statics (Data, Bss), plus read-only
+/// data holding a pointer to something in RAM (round 7c). A read-only static
+/// whose initialiser takes a static's address, or a `static mut` LLVM found
+/// is never written, lands in `.rodata` with an absolute pointer to RAM; that
+/// address is only known at load, so the chunk moves to a RAM segment and the
+/// pointer becomes a load-time reloc. Repeated until nothing more moves (a
+/// pointer to a promoted chunk is a pointer to RAM too).
+fn ram_chunks(store: &Store, order: &[usize]) -> std::collections::HashSet<usize> {
+    use crate::chunk::Kind;
+    let mut ram: std::collections::HashSet<usize> = order
+        .iter()
+        .copied()
+        .filter(|&ci| matches!(store.chunks[ci].kind, Kind::Data | Kind::Bss))
+        .collect();
+    loop {
+        let more: Vec<usize> = order
+            .iter()
+            .copied()
+            .filter(|ci| !ram.contains(ci) && store.chunks[*ci].kind == Kind::ROData)
+            .filter(|&ci| {
+                store.chunks[ci].slots.iter().any(|s| {
+                    s.kind == SlotKind::Abs32
+                        && matches!(s.target, Target::Chunk(j) if ram.contains(&store.canonical(j)))
+                })
+            })
+            .collect();
+        if more.is_empty() {
+            return ram;
+        }
+        ram.extend(more);
+    }
 }
 
 /// Lay out `chunks` from `start`: `.data` first, then `.bss`. Returns the end
@@ -235,6 +266,7 @@ fn lay_out(store: &Store, chunks: &[usize], start: u64, out: &mut HashMap<usize,
 /// Upper bound on the gp window size for `gp` statics with `slots` bulk slots
 /// (worst-case alignment padding included), used by the placement loop.
 fn gp_need(store: &Store, gp: &[usize], slots: u32) -> u64 {
+    // (Read-only chunks promoted to RAM are laid out as initialised data.)
     let mut m = HashMap::new();
     lay_out(store, gp, 4 * slots as u64, &mut m, Seg::Gp).1
 }
@@ -242,6 +274,8 @@ fn gp_need(store: &Store, gp: &[usize], slots: u32) -> u64 {
 pub fn link_pic(store: &Store, roots: &[usize], threshold: u32) -> Result<PicImage> {
     use mvm_abi::{bulk_slots, BULK_BIAS, BULK_PAGE, GP_BIAS, GP_WINDOW};
     let order = store.closure_many(roots);
+    let ram = ram_chunks(store, &order);
+    let is_static = |_: &Store, ci: usize| ram.contains(&ci);
     let mut off: HashMap<usize, (Seg, u32)> = HashMap::new();
     let mut fpc = 0u64;
     let (mut gp, mut bulk) = (Vec::new(), Vec::new());
@@ -301,6 +335,11 @@ pub fn link_pic(store: &Store, roots: &[usize], threshold: u32) -> Result<PicIma
         gp_rewrites: 0,
         bulk_rewrites: 0,
         placed: Vec::new(),
+        promoted: order
+            .iter()
+            .filter(|&&ci| ram.contains(&ci) && store.chunks[ci].kind == crate::chunk::Kind::ROData)
+            .map(|&ci| store.chunks[ci].origin.clone())
+            .collect(),
     };
     for &ci in gp.iter().chain(&bulk) {
         let (seg, o) = img.off[&ci];

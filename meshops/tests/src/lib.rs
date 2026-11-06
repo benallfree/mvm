@@ -565,7 +565,7 @@ impl<'a> Run<'_, 'a> {
     }
 
     /// 13. An applet whose statics don't fit is rejected before anything changes.
-    /// (7c: C's gp window plus a bulk segment that alone would just fit.)
+    ///     (7c: C's gp window plus a bulk segment that alone would just fit.)
     fn fit(&mut self) {
         let free = self.k.free_ram();
         let entries = self.k.registry.len();
@@ -596,8 +596,8 @@ impl<'a> Run<'_, 'a> {
     }
 
     /// 14. D: a 16 KB static buffer plus small counters. Fill, checksum,
-    /// bulk `.data` init, far constant offsets, a later bulk slot. Also the
-    /// per-access cost sections.
+    ///     bulk `.data` init, far constant offsets, a later bulk slot. Also the
+    ///     per-access cost sections.
     fn big_buffer(&mut self) {
         let l = self.k.load(D_A, &img::d::MANIFEST);
         let seed = 0xC0FF_EE11;
@@ -614,7 +614,13 @@ impl<'a> Run<'_, 'a> {
             self.k.call(D_A, img::d::TAIL, &[63, 7]),
         ];
         let bump = self.k.call(D_A, img::d::BUMP, &[2, 100]);
+        let ptrs = self.k.call(D_A, img::d::PTRS_OK, &[]);
+        let _ = self.k.call(D_A, img::d::PTR_SET, &[0]);
         let ok = l.is_ok()
+            && ptrs == Ok(1)
+            && img::d::FILLS_PTRS_IN_BULK
+            && img::d::PROMOTED == 1
+            && !img::d::WORDS_PTR_IN_BULK
             && img::d::WORDS_IN_BULK
             && img::d::SQUARES_IN_BULK
             && img::d::TAIL_IN_BULK
@@ -630,8 +636,9 @@ impl<'a> Run<'_, 'a> {
             "14-big-buffer",
             ok,
             format_args!(
-                "sum={sum:?} want={want:#x} squares={squares:?} corners={corners:?} tail={:?} gp={} bulk={} slots={} gp_acc={} bulk_acc={}",
+                "sum={sum:?} want={want:#x} squares={squares:?} corners={corners:?} tail={:?} ptrs={ptrs:?} relocs={} gp={} bulk={} slots={} gp_acc={} bulk_acc={}",
                 tail[1],
+                img::d::DATA_RELOCS.len(),
                 img::d::MANIFEST.gp.size,
                 img::d::MANIFEST.bulk.size,
                 img::d::MANIFEST.bulk_slots,
@@ -650,7 +657,7 @@ impl<'a> Run<'_, 'a> {
     }
 
     /// 15. E: 41 small statics (over 4 KB in all) build and run; the chunker
-    /// spilled some to bulk.
+    ///     spilled some to bulk.
     fn spill(&mut self) {
         let l = self.k.load(E, &img::e::MANIFEST);
         let init = self.k.call(E, img::e::SUM, &[]);
@@ -682,7 +689,7 @@ impl<'a> Run<'_, 'a> {
     }
 
     /// 16. D again, from a second flash copy: other flash, other gp window,
-    /// other bulk segment; identical code bytes, separate state.
+    ///     other bulk segment; identical code bytes, separate state.
     fn bulk_position_independence(&mut self) {
         let copy = Manifest {
             image: &img::d::IMAGE_COPY.0,
@@ -726,7 +733,7 @@ impl<'a> Run<'_, 'a> {
     }
 
     /// 17. A pointer into D's bulk buffer is the real address: the kernel
-    /// reads 16 KB through it (kernel.mem.sum.v1) and names its owner.
+    ///     reads 16 KB through it (kernel.mem.sum.v1) and names its owner.
     fn bulk_real_pointer(&mut self) {
         let _ = self.k.call(D_A, img::d::FILL, &[0xABCD]);
         let p = self.k.call(D_A, img::d::ADDR, &[5]);
@@ -758,7 +765,7 @@ impl<'a> Run<'_, 'a> {
     }
 
     /// 18. An applet whose bulk segment doesn't fit in free RAM is rejected
-    /// before anything changes (its gp window alone would fit).
+    ///     before anything changes (its gp window alone would fit).
     fn bulk_fit(&mut self) {
         let free = self.k.free_ram();
         let entries = self.k.registry.len();
@@ -784,7 +791,7 @@ impl<'a> Run<'_, 'a> {
     }
 
     /// 19. The 7c applets' source uses only ordinary statics (checked at
-    /// build time by build_applets.py; the counts are in the generated image).
+    ///     build time by build_applets.py; the counts are in the generated image).
     fn no_annotations(&mut self) {
         let ok = img::PLAIN_STATICS > 0 && img::ANNOTATED_STATICS == 0;
         self.check(

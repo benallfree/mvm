@@ -30,6 +30,11 @@ applet gets one static block, with no heap. All levels share one kernel-owned st
 Pointers are real chip addresses. All 13 tests pass on all four targets, and the
 fast interpreter is unchanged in speed (35.9x crc16, 24.1x parse). See
 [MEMMODEL.md](MEMMODEL.md).
+**Round 7c** (`spike-bulk`) removes 7b's 4 KB limit on statics without annotations.
+The chunker puts each static either in the 4 KB gp window or in a bulk segment of
+any size. An access to a bulk static is rewritten in place to load a slot from the
+gp window, at about +0.7 guest instructions per address and no extra code. All 19
+tests pass on all four targets. See [BULK.md](BULK.md).
 
 ## Running it: Docker (stable environment, in or out of the cloud)
 
@@ -68,7 +73,7 @@ toolchains, not the dependency cache.
 | `chunker/` | The host tool. Commands: `dump`, `hashes`, `roundtrip`, `applet-roundtrip`, `names`, `manifest`, `compare`, `link` (writes a flat image and entry addresses to disk) |
 | `guest/kernels` | Speed-spike workloads: `crc16` and `parse` |
 | `abi/` | `mvm-abi`: the guest/kernel contract (FNV-1a 64, call ABI registers, manifest table layouts), used by both sides |
-| `meshops/` | Rounds seven and 7b (one Cargo workspace): `kernel` (registry, loader, ecall dispatch), `tests` (shared runner), `host`, `fw-unicorn`, `build_applets.py`, `run_unicorn.py`, `run.sh` |
+| `meshops/` | Rounds 7, 7b and 7c (one Cargo workspace): `kernel` (registry, loader, ecall dispatch), `tests` (shared runner), `host`, `fw-unicorn`, `build_applets.py`, `run_unicorn.py`, `run.sh` |
 | `guest/applets` | Round-seven test applets (H, A, A2, B, M) |
 | `docker/` | `Dockerfile`, `build.sh`, `run.sh`, `run-all.sh`: the pinned environment |
 | `emu/` | Round six: `bench-core` (shared firmware body), `nrf52840` (Embassy, Renode), `esp32s3` (esp-hal, QEMU), `setup-tools.sh`, `run.sh` |

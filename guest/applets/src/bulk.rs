@@ -40,6 +40,10 @@ static mut TAIL: [u32; 64] = [0; 64];
 /// Small: gp window.
 static mut FILLS: u32 = 0;
 static mut SEED: u32 = 0x1234_5678;
+/// A pointer into bulk, stored in the gp window (a load-time data reloc gp -> bulk).
+static mut WORDS_PTR: *mut u32 = unsafe { addr_of_mut!(WORDS) as *mut u32 };
+/// 64 pointers back into the gp window, stored in bulk (256 B: data relocs bulk -> gp).
+static mut FILLS_PTRS: [*const u32; 64] = [unsafe { addr_of!(FILLS) }; 64];
 /// Bumped by the gp access-cost loop.
 static mut TOUCHES: u32 = 0;
 
@@ -122,6 +126,31 @@ pub extern "C" fn d_tail(i: u32, v: u32) -> u32 {
         let t = &mut *addr_of_mut!(TAIL);
         t[i as usize % 64] = v;
         t.iter().fold(0u32, |a, &x| a.wrapping_add(x))
+    }
+}
+
+/// Pointers stored in statics: 1 if `WORDS_PTR` is `&WORDS[0]` and every
+/// `FILLS_PTRS[i]` is `&FILLS`, and both read the right values.
+#[no_mangle]
+pub extern "C" fn d_ptrs_ok() -> u32 {
+    unsafe {
+        let w = *addr_of!(WORDS_PTR);
+        let ok_w = w == addr_of_mut!(WORDS) as *mut u32 && *w == (*addr_of!(WORDS))[0];
+        let ok_f = (*addr_of!(FILLS_PTRS))
+            .iter()
+            .all(|&p| p == addr_of!(FILLS) && *p == *addr_of!(FILLS));
+        (ok_w && ok_f) as u32
+    }
+}
+
+/// Point `WORDS_PTR` at `WORDS[i]` (its writer, so it stays a writable static)
+/// and return what it points at.
+#[no_mangle]
+pub extern "C" fn d_ptr_set(i: u32) -> u32 {
+    unsafe {
+        let p = (addr_of_mut!(WORDS) as *mut u32).add(i as usize % 4096);
+        *addr_of_mut!(WORDS_PTR) = p;
+        *p
     }
 }
 

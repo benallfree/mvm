@@ -328,12 +328,14 @@ fn link_pic_out(store: &Store, entries: &[String], out: &str, threshold: u32) ->
         .map(|p| format!("[{:?}, {}, \"{}\", {}, \"{}\"]", p.origin, p.size, p.seg.name(), p.off, p.why))
         .collect();
     j += &format!("\n  \"placed\": [{}],", placed.join(", "));
+    let promoted: Vec<String> = img.promoted.iter().map(|o| format!("{o:?}")).collect();
+    j += &format!("\n  \"promoted\": [{}],", promoted.join(", "));
     let abs: Vec<String> = img.abs_flash.iter().map(|(c, o)| format!("[\"{c}\", {o}]")).collect();
     j += &format!("\n  \"abs_flash\": [{}]\n}}\n", abs.join(", "));
     w(format!("{out}.json"), j.as_bytes())?;
     let spilled = img.placed.iter().filter(|p| p.why == "spill").count();
     println!(
-        "flash {} bytes, gp window {} bytes ({} slots), bulk {} bytes ({} statics, {} spilled), {} gp / {} bulk accesses, {} data relocs, {} absolute pointers in flash",
+        "flash {} bytes, gp window {} bytes ({} slots), bulk {} bytes ({} statics, {} spilled), {} gp / {} bulk accesses, {} data relocs, {} rodata promoted to RAM, {} absolute pointers in flash",
         img.flash.len(),
         img.gp.size,
         img.bulk_slots,
@@ -343,6 +345,7 @@ fn link_pic_out(store: &Store, entries: &[String], out: &str, threshold: u32) ->
         img.gp_rewrites,
         img.bulk_rewrites,
         img.data_relocs.len(),
+        img.promoted.len(),
         img.abs_flash.len()
     );
     Ok(())
