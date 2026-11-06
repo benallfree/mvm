@@ -28,6 +28,9 @@ pub mod names {
     pub const NOP: &str = "kernel.nop.v1";
     /// `(ptr) -> applet id + 1` of the applet whose static block holds `ptr`, else 0.
     pub const MEM_OWNER: &str = "kernel.mem.owner.v1";
+    /// Round 7c: the kernel sums `len` bytes at a guest pointer (proves the
+    /// pointer is a real address the kernel can read).
+    pub const MEM_SUM: &str = "kernel.mem.sum.v1";
 }
 
 /// Only the kernel may register names starting with this.
@@ -37,6 +40,30 @@ pub const KERNEL_NAMESPACE: &[u8] = b"kernel.";
 /// offsets of rewritten accesses reach the whole block (up to 4 KB). See
 /// MEMMODEL.md.
 pub const GP_BIAS: u32 = 2048;
+
+/// Round 7c: bulk statics (see BULK.md). The gp window is at most
+/// `GP_WINDOW` bytes. Its first words are the **bulk slots**: slot `k` (at gp
+/// window offset `4k`) holds the real address `bulk + BULK_PAGE * k +
+/// BULK_BIAS`, written by the kernel at load. An access to a bulk static at
+/// offset `o` loads slot `o / BULK_PAGE` in place of the `auipc`, and its
+/// paired instruction uses `o - BULK_PAGE * k - BULK_BIAS` (always a 12-bit
+/// value), so any offset in a bulk segment of any size is reachable without
+/// adding instructions.
+pub const GP_WINDOW: u32 = 2 * GP_BIAS;
+pub const BULK_PAGE: u32 = 4096;
+pub const BULK_BIAS: u32 = 2048;
+/// Statics this size or larger go to bulk (the chunker's default threshold).
+pub const BULK_THRESHOLD: u32 = 256;
+
+/// Number of bulk slots for a bulk segment of `size` bytes (covers every
+/// offset in `0..=size`, including one-past-the-end addresses).
+pub const fn bulk_slots(size: u32) -> u32 {
+    if size == 0 {
+        0
+    } else {
+        size / BULK_PAGE + 1
+    }
+}
 
 /// The mesh-op call ABI: `ecall` with the import slot in a7, arguments in
 /// a0..a5, result in a0 (and a1). Register numbers, x0 = 0.

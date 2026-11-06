@@ -8,7 +8,9 @@ import json, os, re
 HERE = os.path.dirname(os.path.abspath(__file__))
 EMU = os.path.join(HERE, "..", "emu", "out")
 TESTS = ["load", "1-hello", "2-timer", "3-nop-cost", "4-applet-op", "5-nested", "6-missing-import", "7-swap", "8-spoof",
-         "9-position-independence", "10-instances", "11-real-pointers", "12-shared-stack", "13-fit"]
+         "9-position-independence", "10-instances", "11-real-pointers", "12-shared-stack", "13-fit",
+         "14-big-buffer", "15-overflow-spill", "16-bulk-position-independence", "17-bulk-real-pointer", "18-bulk-fit",
+         "19-no-annotations"]
 # Thumb: run_guest's prologue (9 saved registers + 0xc4); dispatch is inlined and
 # run_guest calls itself directly. Round seven: 464 B (run_guest 392 + dispatch 72).
 HOST_STACK_PER_LEVEL = 232

@@ -64,7 +64,7 @@ echo "cycles: emulator counts, not cycle-accurate (sanity check only)"
 echo
 printf '%-9s %-24s %-5s %s\n' chip test ok detail
 for chip in nrf52840 esp32s3; do
-  for t in load 1-hello 2-timer 3-nop-cost 4-applet-op 5-nested 6-missing-import 7-swap 8-spoof 9-position-independence 10-instances 11-real-pointers 12-shared-stack 13-fit done; do
+  for t in load 1-hello 2-timer 3-nop-cost 4-applet-op 5-nested 6-missing-import 7-swap 8-spoof 9-position-independence 10-instances 11-real-pointers 12-shared-stack 13-fit 14-big-buffer 15-overflow-spill 16-bulk-position-independence 17-bulk-real-pointer 18-bulk-fit 19-no-annotations done; do
     line=$(grep -a "^MO $chip $t " "$OUT/$chip.uart" 2>/dev/null | head -1)
     if [ -z "$line" ]; then printf '%-9s %-24s %-5s\n' $chip $t FAIL; fail=1; continue; fi
     ok=FAIL; grep -q ' pass=1' <<<"$line" && ok=PASS

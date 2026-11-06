@@ -18,7 +18,8 @@ import thumb  # noqa: E402
 from unicorn import UC_HOOK_CODE  # noqa: E402
 
 SECTIONS = ["load_all", "empty_loop", "nop_loop", "uart_loop_muted", "local_loop_len0", "echo_loop_len0",
-            "local_loop_len64", "echo_loop_len64", "recurse_depth1", "recurse_depth6", "call_overhead"]
+            "local_loop_len64", "echo_loop_len64", "recurse_depth1", "recurse_depth6", "call_overhead",
+            "none_access_loop", "gp_access_loop", "bulk_access_loop"]
 STACK_TOP = thumb.STACK_TOP
 PAINT = 0xA5
 

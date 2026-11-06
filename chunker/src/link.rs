@@ -123,93 +123,196 @@ pub fn link_many(store: &Store, roots: &[usize], base: u32) -> Result<Image> {
     Ok(Image { bytes, addr })
 }
 
-/// Round 7b: a position-independent link. Nothing is linked at an address.
+/// Where a chunk lives in a position-independent link.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Seg {
+    /// The flash image (code + rodata).
+    Flash,
+    /// The gp window: small statics, reached `gp`-relative.
+    Gp,
+    /// The bulk segment: large statics, reached through a bulk slot.
+    Bulk,
+}
+
+impl Seg {
+    pub fn name(self) -> &'static str {
+        match self {
+            Seg::Flash => "flash",
+            Seg::Gp => "gp",
+            Seg::Bulk => "bulk",
+        }
+    }
+}
+
+/// A RAM segment's layout: size, alignment and its initial bytes (a prefix:
+/// `.data` is laid out before `.bss`, so the zeros after it aren't stored).
+#[derive(Default)]
+pub struct SegImage {
+    pub size: u32,
+    pub align: u32,
+    pub init: Vec<u8>,
+}
+
+/// One static's placement, for the report.
+pub struct Placed {
+    pub origin: String,
+    pub size: u32,
+    pub seg: Seg,
+    pub off: u32,
+    /// Why it went to bulk ("threshold" or "spill"); empty for gp.
+    pub why: &'static str,
+}
+
+/// Rounds 7b and 7c: a position-independent link. Nothing is linked at an
+/// address.
 ///
 /// - Code and read-only data (Text, ROData) go into one flash image laid out
 ///   from offset 0. References between them must be PC-relative (build with
 ///   `-C code-model=medium`), so the image runs unchanged at any address.
-/// - Writable statics (Data, Bss) go into a separate static block that the
-///   kernel places in RAM at load. Every code reference to a static is
-///   rewritten to be relative to `gp`, which the kernel points at
-///   `block + mvm_abi::GP_BIAS`:
-///   - the `auipc`/`lui` of the pair becomes `addi rd, gp, 0` (`mv rd, gp`);
-///   - each paired `addi`/load/store gets the static's offset from `gp`.
+/// - Writable statics (Data, Bss) go into one of two RAM segments the kernel
+///   places at load (round 7c):
+///   - the **gp window** (at most 4 KB): `gp` = window + `GP_BIAS`. The
+///     `auipc` of an access becomes `addi rd, gp, 0`; the paired
+///     instruction gets the offset from `gp`.
+///   - the **bulk segment** (any size): the `auipc` becomes
+///     `lw rd, slot_k(gp)`, a load of bulk slot `k` at the start of the gp
+///     window (the kernel writes `bulk + 4096k + 2048` there), and the paired
+///     instruction gets the offset from that address.
 ///
 ///   No instruction is added or removed, and the code bytes depend only on
-///   the applet's own static layout, never on where it is loaded.
-/// - Pointers stored *in* statics (`.data` relocations) are listed in
-///   `data_relocs` for the kernel to apply in RAM at load. Pointers stored in
-///   flash data (absolute words in rodata) can't be made position
-///   independent this way; they are written as image offsets and listed in
-///   `abs_flash` so callers can see (and reject) them.
+///   the applet's own layout, never on where the segments are placed.
+/// - Placement is automatic: statics of `threshold` bytes or more go to
+///   bulk; if the rest (plus the slots) still exceed the window, the largest
+///   remaining move to bulk until they fit.
+/// - Pointers stored *in* statics are listed in `data_relocs` for the kernel
+///   to apply in RAM at load. Pointers stored in flash data can't be made
+///   position independent this way; they are written as image offsets and
+///   listed in `abs_flash`.
 pub struct PicImage {
     pub flash: Vec<u8>,
-    pub flash_off: HashMap<usize, u32>,
-    pub static_size: u32,
-    pub static_align: u32,
-    /// Initial contents of the static block (`.data` bytes, zeros for `.bss`).
-    pub static_init: Vec<u8>,
-    pub static_off: HashMap<usize, u32>,
-    /// (offset in the static block, target is static?, target offset)
-    pub data_relocs: Vec<(u32, bool, u32)>,
+    pub off: HashMap<usize, (Seg, u32)>,
+    pub gp: SegImage,
+    pub bulk: SegImage,
+    /// Bulk slots at the start of the gp window.
+    pub bulk_slots: u32,
+    /// (segment holding the pointer, offset in it, target segment, target offset)
+    pub data_relocs: Vec<(Seg, u32, Seg, u32)>,
     /// Absolute pointers in flash data: (chunk origin, offset in chunk).
     pub abs_flash: Vec<(String, u32)>,
-    /// Code accesses rewritten to be gp-relative.
+    /// Code accesses rewritten to be gp-relative / through a bulk slot.
     pub gp_rewrites: usize,
+    pub bulk_rewrites: usize,
+    pub placed: Vec<Placed>,
 }
 
 fn is_static(store: &Store, ci: usize) -> bool {
     matches!(store.chunks[ci].kind, crate::chunk::Kind::Data | crate::chunk::Kind::Bss)
 }
 
-pub fn link_pic(store: &Store, roots: &[usize]) -> Result<PicImage> {
-    use mvm_abi::GP_BIAS;
+/// Lay out `chunks` from `start`: `.data` first, then `.bss`. Returns the end
+/// of the last `.data` byte (the initialised prefix) and the total size.
+fn lay_out(store: &Store, chunks: &[usize], start: u64, out: &mut HashMap<usize, (Seg, u32)>, seg: Seg) -> (u64, u64, u64) {
+    let (mut pc, mut init_end, mut align) = (start, start, 4u64);
+    for bss in [false, true] {
+        for &ci in chunks {
+            let c = &store.chunks[ci];
+            if (c.kind == crate::chunk::Kind::Bss) != bss {
+                continue;
+            }
+            let a = c.align.max(1);
+            pc = pc.div_ceil(a) * a;
+            out.insert(ci, (seg, pc as u32));
+            pc += c.bytes.len() as u64;
+            align = align.max(a);
+            if !bss {
+                init_end = pc;
+            }
+        }
+    }
+    (init_end, pc, align)
+}
+
+/// Upper bound on the gp window size for `gp` statics with `slots` bulk slots
+/// (worst-case alignment padding included), used by the placement loop.
+fn gp_need(store: &Store, gp: &[usize], slots: u32) -> u64 {
+    let mut m = HashMap::new();
+    lay_out(store, gp, 4 * slots as u64, &mut m, Seg::Gp).1
+}
+
+pub fn link_pic(store: &Store, roots: &[usize], threshold: u32) -> Result<PicImage> {
+    use mvm_abi::{bulk_slots, BULK_BIAS, BULK_PAGE, GP_BIAS, GP_WINDOW};
     let order = store.closure_many(roots);
-    let (mut flash_off, mut static_off) = (HashMap::new(), HashMap::new());
-    let (mut fpc, mut spc, mut salign) = (0u64, 0u64, 4u64);
+    let mut off: HashMap<usize, (Seg, u32)> = HashMap::new();
+    let mut fpc = 0u64;
+    let (mut gp, mut bulk) = (Vec::new(), Vec::new());
+    let mut why: HashMap<usize, &'static str> = HashMap::new();
     for &ci in &order {
         let c = &store.chunks[ci];
-        let a = c.align.max(1);
         if is_static(store, ci) {
-            spc = spc.div_ceil(a) * a;
-            static_off.insert(ci, spc as u32);
-            spc += c.bytes.len() as u64;
-            salign = salign.max(a);
+            if c.bytes.len() as u64 >= threshold as u64 {
+                bulk.push(ci);
+                why.insert(ci, "threshold");
+            } else {
+                gp.push(ci);
+            }
         } else {
+            let a = c.align.max(1);
             fpc = fpc.div_ceil(a) * a;
-            flash_off.insert(ci, fpc as u32);
+            off.insert(ci, (Seg::Flash, fpc as u32));
             fpc += c.bytes.len() as u64;
         }
     }
+    // Spill: move the largest gp statics to bulk until the window fits.
+    let bulk_size_of = |b: &[usize]| {
+        let mut m = HashMap::new();
+        lay_out(store, b, 0, &mut m, Seg::Bulk).1 as u32
+    };
+    loop {
+        let slots = bulk_slots(bulk_size_of(&bulk));
+        if gp_need(store, &gp, slots) <= GP_WINDOW as u64 {
+            break;
+        }
+        let (i, _) = gp
+            .iter()
+            .enumerate()
+            .max_by_key(|&(i, &ci)| (store.chunks[ci].bytes.len(), core::cmp::Reverse(i)))
+            .ok_or("the bulk slots alone overflow the gp window")?;
+        let ci = gp.remove(i);
+        why.insert(ci, "spill");
+        bulk.push(ci);
+    }
+    // Keep bulk in link order (placement doesn't depend on spill order).
+    bulk.sort_by_key(|ci| order.iter().position(|o| o == ci));
+    let (b_init, b_size, b_align) = lay_out(store, &bulk, 0, &mut off, Seg::Bulk);
+    let slots = bulk_slots(b_size as u32);
+    let (g_init, g_size, g_align) = lay_out(store, &gp, 4 * slots as u64, &mut off, Seg::Gp);
+    assert!(g_size <= GP_WINDOW as u64);
     // Pad the image to whole words (flash images are fetched in halfwords
     // and placed at word-aligned addresses).
     fpc = fpc.div_ceil(4) * 4;
-    if spc > 2 * GP_BIAS as u64 {
-        return Err(format!(
-            "statics are {spc} bytes; gp-relative 12-bit offsets reach {} (see MEMMODEL.md)",
-            2 * GP_BIAS
-        ));
-    }
     let mut img = PicImage {
         flash: vec![0u8; fpc as usize],
-        flash_off,
-        static_size: spc as u32,
-        static_align: salign as u32,
-        static_init: vec![0u8; spc as usize],
-        static_off,
+        off,
+        gp: SegImage { size: g_size as u32, align: g_align as u32, init: vec![0u8; g_init as usize] },
+        bulk: SegImage { size: b_size as u32, align: b_align as u32, init: vec![0u8; b_init as usize] },
+        bulk_slots: slots,
         data_relocs: Vec::new(),
         abs_flash: Vec::new(),
         gp_rewrites: 0,
+        bulk_rewrites: 0,
+        placed: Vec::new(),
     };
-    // Where a chunk is: (static?, offset in its area).
-    let off_of = |img: &PicImage, j: usize| -> (bool, u32) {
-        let j = store.canonical(j);
-        if is_static(store, j) {
-            (true, img.static_off[&j])
-        } else {
-            (false, img.flash_off[&j])
-        }
-    };
+    for &ci in gp.iter().chain(&bulk) {
+        let (seg, o) = img.off[&ci];
+        img.placed.push(Placed {
+            origin: store.chunks[ci].origin.clone(),
+            size: store.chunks[ci].bytes.len() as u32,
+            seg,
+            off: o,
+            why: why.get(&ci).copied().unwrap_or(""),
+        });
+    }
+    let off_of = |img: &PicImage, j: usize| -> (Seg, u32) { img.off[&store.canonical(j)] };
     let chunk_of = |t: &Target, origin: &str| -> Result<usize> {
         match t {
             Target::Chunk(j) => Ok(*j),
@@ -218,12 +321,22 @@ pub fn link_pic(store: &Store, roots: &[usize]) -> Result<PicImage> {
     };
     let rd32 = |b: &[u8], at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
     let wr32 = |b: &mut [u8], at: usize, v: u32| b[at..at + 4].copy_from_slice(&v.to_le_bytes());
-    let gp_imm = |off: i64| -> Result<i32> {
-        let v = off - GP_BIAS as i64;
+    let imm12 = |v: i64, what: &str| -> Result<i32> {
         if (-2048..2048).contains(&v) {
             Ok(v as i32)
         } else {
-            Err(format!("gp offset {v} out of 12-bit range"))
+            Err(format!("{what} offset {v} out of 12-bit range"))
+        }
+    };
+    // The 12-bit immediate of the instruction paired with an access to (seg, v).
+    let lo_imm = |seg: Seg, v: i64| -> Result<i32> {
+        match seg {
+            Seg::Gp => imm12(v - GP_BIAS as i64, "gp"),
+            Seg::Bulk => {
+                let k = page(v, slots)?;
+                imm12(v - (BULK_PAGE * k + BULK_BIAS) as i64, "bulk")
+            }
+            Seg::Flash => unreachable!(),
         }
     };
 
@@ -231,82 +344,100 @@ pub fn link_pic(store: &Store, roots: &[usize]) -> Result<PicImage> {
         let c = &store.chunks[ci];
         if is_static(store, ci) {
             // Static data: copy the initial bytes; pointers inside become load-time relocs.
-            let o = img.static_off[&ci] as usize;
-            img.static_init[o..o + c.bytes.len()].copy_from_slice(&c.bytes);
+            let (seg, o) = img.off[&ci];
+            let init = if seg == Seg::Gp { &mut img.gp.init } else { &mut img.bulk.init };
+            if c.kind != crate::chunk::Kind::Bss {
+                init[o as usize..o as usize + c.bytes.len()].copy_from_slice(&c.bytes);
+            }
             for s in &c.slots {
                 if s.kind != SlotKind::Abs32 {
                     return Err(format!("{}: {:?} in static data", c.origin, s.kind));
                 }
-                let (to_static, t) = off_of(&img, chunk_of(&s.target, &c.origin)?);
-                img.data_relocs.push((o as u32 + s.at, to_static, (t as i64 + s.addend) as u32));
+                let (ts, t) = off_of(&img, chunk_of(&s.target, &c.origin)?);
+                img.data_relocs.push((seg, o + s.at, ts, (t as i64 + s.addend) as u32));
             }
             continue;
         }
-        let a = img.flash_off[&ci];
+        let (_, a) = img.off[&ci];
         let o = a as usize;
         let mut buf = c.bytes.clone();
         for s in &c.slots {
             let at = s.at as usize;
             let p = (a + s.at) as i64;
-            let target = |t: &Target, addend: i64| -> Result<(bool, i64)> {
-                let (st, off) = off_of(&img, chunk_of(t, &c.origin)?);
-                Ok((st, off as i64 + addend))
+            let target = |t: &Target, addend: i64| -> Result<(Seg, i64)> {
+                let (seg, off) = off_of(&img, chunk_of(t, &c.origin)?);
+                Ok((seg, off as i64 + addend))
             };
             let or32 = |buf: &mut [u8], at: usize, v: u32| {
                 let w = rd32(buf, at) | v;
                 wr32(buf, at, w)
             };
             let hi = |v: i64| u_imm((v as i32).wrapping_add(0x800));
-            // `auipc`/`lui rd` -> `addi rd, gp, 0`.
-            let to_mv_gp = |buf: &mut [u8], at: usize| -> Result<()> {
+            // `auipc`/`lui rd` -> `addi rd, gp, 0` (gp window) or
+            // `lw rd, slot(gp)` (bulk). Same size; rd is kept.
+            let rewrite_hi = |buf: &mut [u8], at: usize, seg: Seg, v: i64| -> Result<()> {
                 let w = rd32(buf, at);
                 if !matches!(w & 0x7f, 0x17 | 0x37) {
                     return Err(format!("{}: expected auipc/lui at {at:#x}", c.origin));
                 }
-                wr32(buf, at, (w & (31 << 7)) | (3 << 15) | 0x13);
+                let rd = w & (31 << 7);
+                let new = match seg {
+                    Seg::Gp => rd | (3 << 15) | 0x13,
+                    _ => {
+                        let slot = 4 * page(v, slots)? as i32 - GP_BIAS as i32;
+                        i_imm(slot) | (3 << 15) | (2 << 12) | rd | 0x03
+                    }
+                };
+                wr32(buf, at, new);
                 Ok(())
             };
             match s.kind {
                 SlotKind::PcrelHi20 | SlotKind::Hi20 => {
-                    let (st, v) = target(&s.target, s.addend)?;
-                    if st {
-                        to_mv_gp(&mut buf, at)?;
-                        img.gp_rewrites += 1;
-                    } else if s.kind == SlotKind::Hi20 {
-                        return Err(format!(
-                            "{}: absolute address of flash data at {at:#x}; build with -C code-model=medium",
-                            c.origin
-                        ));
-                    } else {
-                        or32(&mut buf, at, hi(v - p));
+                    let (seg, v) = target(&s.target, s.addend)?;
+                    match seg {
+                        Seg::Flash if s.kind == SlotKind::Hi20 => {
+                            return Err(format!(
+                                "{}: absolute address of flash data at {at:#x}; build with -C code-model=medium",
+                                c.origin
+                            ))
+                        }
+                        Seg::Flash => or32(&mut buf, at, hi(v - p)),
+                        Seg::Gp => {
+                            rewrite_hi(&mut buf, at, seg, v)?;
+                            img.gp_rewrites += 1;
+                        }
+                        Seg::Bulk => {
+                            rewrite_hi(&mut buf, at, seg, v)?;
+                            img.bulk_rewrites += 1;
+                        }
                     }
                 }
                 SlotKind::Lo12I | SlotKind::Lo12S => {
-                    let (st, v) = target(&s.target, s.addend)?;
-                    if !st {
+                    let (seg, v) = target(&s.target, s.addend)?;
+                    if seg == Seg::Flash {
                         return Err(format!("{}: absolute flash address at {at:#x}", c.origin));
                     }
-                    let i = gp_imm(v)?;
+                    let i = lo_imm(seg, v)?;
                     or32(&mut buf, at, if s.kind == SlotKind::Lo12I { i_imm(i) } else { s_imm(i) });
                 }
                 SlotKind::PcrelLo12I | SlotKind::PcrelLo12S => {
                     let Target::PcrelHi(h) = s.target else { unreachable!() };
                     let hs = c.slots.iter().find(|t| t.at == h && t.kind == SlotKind::PcrelHi20).unwrap();
-                    let (st, v) = target(&hs.target, hs.addend)?;
-                    let imm = if st { gp_imm(v)? } else { (v - (a + h) as i64) as i32 };
+                    let (seg, v) = target(&hs.target, hs.addend)?;
+                    let imm = if seg == Seg::Flash { (v - (a + h) as i64) as i32 } else { lo_imm(seg, v)? };
                     or32(&mut buf, at, if s.kind == SlotKind::PcrelLo12I { i_imm(imm) } else { s_imm(imm) });
                 }
                 SlotKind::Abs32 => {
-                    let (st, v) = target(&s.target, s.addend)?;
-                    if st {
+                    let (seg, v) = target(&s.target, s.addend)?;
+                    if seg != Seg::Flash {
                         return Err(format!("{}: pointer to RAM stored in flash at {at:#x}", c.origin));
                     }
                     or32(&mut buf, at, v as u32);
                     img.abs_flash.push((c.origin.clone(), s.at));
                 }
                 SlotKind::Call | SlotKind::Jal | SlotKind::Branch | SlotKind::RvcJump | SlotKind::RvcBranch => {
-                    let (st, v) = target(&s.target, s.addend)?;
-                    if st {
+                    let (seg, v) = target(&s.target, s.addend)?;
+                    if seg != Seg::Flash {
                         return Err(format!("{}: jump into static data at {at:#x}", c.origin));
                     }
                     let d = v - p;
@@ -332,4 +463,14 @@ pub fn link_pic(store: &Store, roots: &[usize]) -> Result<PicImage> {
         img.flash[o..o + buf.len()].copy_from_slice(&buf);
     }
     Ok(img)
+}
+
+/// The bulk slot covering bulk offset `v`.
+fn page(v: i64, slots: u32) -> Result<u32> {
+    let k = v.div_euclid(mvm_abi::BULK_PAGE as i64);
+    if (0..slots as i64).contains(&k) {
+        Ok(k as u32)
+    } else {
+        Err(format!("bulk offset {v} outside the bulk segment"))
+    }
 }

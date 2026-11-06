@@ -1,7 +1,7 @@
 #![no_std]
-//! Round-seven mesh-op tests, shared by every target. A target supplies an
+//! Mesh-op tests (rounds 7, 7b, 7c), shared by every target. A target supplies an
 //! output sink, a monotonic tick source (for kernel.timer.now.v1) and a cycle
-//! counter; this loads the applets and runs tests 1-13 plus the cost sections.
+//! counter; this loads the applets and runs tests 1-19 plus the cost sections.
 //!
 //! Lines: `MO <chip> <test> pass=<0|1> <details>` and
 //! `MO <chip> cost <section> n=<N> cycles=<C> [steps=<S>]`, then `MO <chip> done pass=<0|1>`.
@@ -11,7 +11,7 @@
 use core::fmt::Write;
 use core::ptr::addr_of_mut;
 use interp::fast;
-use mvm_kernel::{fnv1a64, fnv1a64_bytes, Console, Error, Kernel, Manifest, MAX_DEPTH};
+use mvm_kernel::{bulk_slots, fnv1a64, fnv1a64_bytes, Console, Error, Kernel, Manifest, Segment, MAX_DEPTH};
 
 #[allow(dead_code)]
 mod img {
@@ -19,7 +19,7 @@ mod img {
 }
 
 /// The measured sections, in the order they run (each brackets one counter pair).
-pub const SECTIONS: [&str; 11] = [
+pub const SECTIONS: [&str; 14] = [
     "load_all",
     "empty_loop",
     "nop_loop",
@@ -31,6 +31,9 @@ pub const SECTIONS: [&str; 11] = [
     "recurse_depth1",
     "recurse_depth6",
     "call_overhead",
+    "none_access_loop",
+    "gp_access_loop",
+    "bulk_access_loop",
 ];
 
 /// Dev-side name table: the kernel only knows hashes.
@@ -127,11 +130,11 @@ impl<W: Write> Console for Tee<'_, W> {
 }
 
 /// The kernel's RAM arena: applet static blocks at the bottom, the one shared stack on top.
-const RAM_SIZE: usize = 16 * 1024;
+const RAM_SIZE: usize = 56 * 1024;
 const STACK_SIZE: u32 = 8 * 1024;
 static mut RAM: [u8; RAM_SIZE] = [0; RAM_SIZE];
 /// Decode tables for every loaded flash image (one entry per 2 bytes of image).
-const TABLES: usize = 4096;
+const TABLES: usize = 6144;
 static mut TABLE: [fast::E; TABLES] = [fast::E::EMPTY; TABLES];
 
 const H: u8 = 0;
@@ -145,6 +148,14 @@ const C_A: u8 = 6;
 const C_B: u8 = 7;
 const C_COPY: u8 = 8;
 const FIT: u8 = 9;
+/// Applet D (16 KB bulk buffer): two instances, from two flash copies.
+const D_A: u8 = 10;
+const D_B: u8 = 11;
+/// Applet E (40 small statics that overflow the gp window).
+const E: u8 = 12;
+const BULK_FIT: u8 = 13;
+/// D's `SEED` at load.
+const D_SEED: u32 = 0x1234_5678;
 
 /// A2's test.echo.v1 tags its answer so callers can tell which provider ran.
 const A2_TAG: u32 = 0xA2A2_0000;
@@ -195,6 +206,12 @@ pub fn run_all<W: Write>(
     r.real_pointers();
     r.shared_stack();
     r.fit();
+    r.big_buffer();
+    r.spill();
+    r.bulk_position_independence();
+    r.bulk_real_pointer();
+    r.bulk_fit();
+    r.no_annotations();
 
     // The kernel held `out` (through the console) until now.
     let Run { report, all, .. } = r;
@@ -548,23 +565,252 @@ impl<'a> Run<'_, 'a> {
     }
 
     /// 13. An applet whose statics don't fit is rejected before anything changes.
+    /// (7c: C's gp window plus a bulk segment that alone would just fit.)
     fn fit(&mut self) {
         let free = self.k.free_ram();
         let entries = self.k.registry.len();
+        let bulk = free - 16;
         let big = Manifest {
-            static_size: free + 1,
+            bulk: Segment {
+                size: bulk,
+                align: 4,
+                init: &[],
+            },
+            bulk_slots: bulk_slots(bulk),
+            gp: Segment {
+                size: img::c::MANIFEST.gp.size.max(4 * bulk_slots(bulk)),
+                ..img::c::MANIFEST.gp
+            },
             ..img::c::MANIFEST
         };
         let r = self.k.load(FIT, &big);
-        let ok =
-            r == Err(Error::NoRoom {
-                need: free + 1,
-                free,
-            }) && self.k.free_ram() == free
-                && self.k.registry.len() == entries
-                && self.k.applets[FIT as usize].is_none();
+        let ok = matches!(r, Err(Error::NoRoom { need, free: f }) if f == free && need > free)
+            && self.k.free_ram() == free
+            && self.k.registry.len() == entries
+            && self.k.applets[FIT as usize].is_none();
         self.check("13-fit", ok, format_args!("free={free} result={r:?}"));
     }
+
+    fn bulk_of(&self, id: u8) -> u32 {
+        self.k.applets[id as usize].map(|a| a.bulk).unwrap_or(0)
+    }
+
+    /// 14. D: a 16 KB static buffer plus small counters. Fill, checksum,
+    /// bulk `.data` init, far constant offsets, a later bulk slot. Also the
+    /// per-access cost sections.
+    fn big_buffer(&mut self) {
+        let l = self.k.load(D_A, &img::d::MANIFEST);
+        let seed = 0xC0FF_EE11;
+        let fills = self.k.call(D_A, img::d::FILL, &[seed]);
+        let sum = self.k.call(D_A, img::d::SUM, &[]);
+        let want = d_checksum(seed ^ D_SEED);
+        let squares = self.k.call(D_A, img::d::SQUARES_SUM, &[]);
+        let want_sq = (0..96u32).fold(0u32, |a, i| a.wrapping_add(i * i * 7 + 1));
+        let _ = self.k.call(D_A, img::d::CORNERS_SET, &[0x11]);
+        let corners = self.k.call(D_A, img::d::CORNERS_GET, &[]);
+        let want_c = 0x11 ^ (0x12 << 8) ^ (0x13 << 16);
+        let tail = [
+            self.k.call(D_A, img::d::TAIL, &[3, 5]),
+            self.k.call(D_A, img::d::TAIL, &[63, 7]),
+        ];
+        let bump = self.k.call(D_A, img::d::BUMP, &[2, 100]);
+        let ok = l.is_ok()
+            && img::d::WORDS_IN_BULK
+            && img::d::SQUARES_IN_BULK
+            && img::d::TAIL_IN_BULK
+            && !img::d::FILLS_IN_BULK
+            && !img::d::SEED_IN_BULK
+            && fills == Ok(1)
+            && sum == Ok(want)
+            && squares == Ok(want_sq)
+            && corners == Ok(want_c)
+            && tail == [Ok(5), Ok(12)]
+            && bump == Ok(2 * 2 * 7 + 1 + 100);
+        self.check(
+            "14-big-buffer",
+            ok,
+            format_args!(
+                "sum={sum:?} want={want:#x} squares={squares:?} corners={corners:?} tail={:?} gp={} bulk={} slots={} gp_acc={} bulk_acc={}",
+                tail[1],
+                img::d::MANIFEST.gp.size,
+                img::d::MANIFEST.bulk.size,
+                img::d::MANIFEST.bulk_slots,
+                img::d::GP_REWRITES,
+                img::d::BULK_REWRITES
+            ),
+        );
+        let n = self.n;
+        for (name, entry) in [
+            ("none_access_loop", img::d::NONE_LOOP),
+            ("gp_access_loop", img::d::GP_LOOP),
+            ("bulk_access_loop", img::d::BULK_LOOP),
+        ] {
+            let _ = self.timed(name, n, |k| k.call(D_A, entry, &[n]));
+        }
+    }
+
+    /// 15. E: 41 small statics (over 4 KB in all) build and run; the chunker
+    /// spilled some to bulk.
+    fn spill(&mut self) {
+        let l = self.k.load(E, &img::e::MANIFEST);
+        let init = self.k.call(E, img::e::SUM, &[]);
+        // Odd statics start at their index (32 words each), even ones at 0.
+        let want_init = (1..40u32).step_by(2).map(|k| 32 * k).sum::<u32>();
+        let runs = self.k.call(E, img::e::FILL, &[1000]);
+        let after = self.k.call(E, img::e::SUM, &[]);
+        let want = (0..40 * 32u32).fold(0u32, |a, i| a.wrapping_add(1000 + i));
+        let m = &img::e::MANIFEST;
+        let ok = l.is_ok()
+            && init == Ok(want_init)
+            && runs == Ok(1)
+            && after == Ok(want)
+            && img::e::STATIC_BYTES > mvm_kernel::GP_BIAS * 2
+            && img::e::SPILLED > 0
+            && m.gp.size <= mvm_kernel::GP_BIAS * 2;
+        self.check(
+            "15-overflow-spill",
+            ok,
+            format_args!(
+                "statics={} bytes={} spilled={} gp={} bulk={} init={init:?} after={after:?}",
+                img::e::STATICS,
+                img::e::STATIC_BYTES,
+                img::e::SPILLED,
+                m.gp.size,
+                m.bulk.size
+            ),
+        );
+    }
+
+    /// 16. D again, from a second flash copy: other flash, other gp window,
+    /// other bulk segment; identical code bytes, separate state.
+    fn bulk_position_independence(&mut self) {
+        let copy = Manifest {
+            image: &img::d::IMAGE_COPY.0,
+            ..img::d::MANIFEST
+        };
+        let a_before = self.k.call(D_A, img::d::SUM, &[]);
+        let l = self.k.load(D_B, &copy);
+        let seed = 0x5EED_0002;
+        let fills = self.k.call(D_B, img::d::FILL, &[seed]);
+        let sum_b = self.k.call(D_B, img::d::SUM, &[]);
+        let a_after = self.k.call(D_A, img::d::SUM, &[]);
+        let fills_a = self.k.call(D_A, img::d::FILL, &[0x77]);
+        let same = img::d::IMAGE.0 == img::d::IMAGE_COPY.0;
+        let (fa, fb) = (self.k.code_addr(D_A, 0), self.k.code_addr(D_B, 0));
+        let ok = l.is_ok()
+            && same
+            && fa != fb
+            && self.block(D_A) != self.block(D_B)
+            && self.bulk_of(D_A) != self.bulk_of(D_B)
+            && fills == Ok(1)
+            && sum_b == Ok(d_checksum(seed ^ D_SEED))
+            && a_before.is_ok()
+            && a_after == a_before
+            && fills_a == Ok(2);
+        self.check(
+            "16-bulk-position-independence",
+            ok,
+            format_args!(
+                "flash={:#x},{:#x} gp={:#x},{:#x} bulk={:#x},{:#x} image_fnv={:#018x} identical={} sums={a_after:?},{sum_b:?} want_b={:#x} fills={fills:?},{fills_a:?}",
+                fa.unwrap_or(0),
+                fb.unwrap_or(0),
+                self.block(D_A),
+                self.block(D_B),
+                self.bulk_of(D_A),
+                self.bulk_of(D_B),
+                fnv1a64_bytes(&img::d::IMAGE.0),
+                same as u8,
+                d_checksum(seed ^ D_SEED)
+            ),
+        );
+    }
+
+    /// 17. A pointer into D's bulk buffer is the real address: the kernel
+    /// reads 16 KB through it (kernel.mem.sum.v1) and names its owner.
+    fn bulk_real_pointer(&mut self) {
+        let _ = self.k.call(D_A, img::d::FILL, &[0xABCD]);
+        let p = self.k.call(D_A, img::d::ADDR, &[5]);
+        let want = self.bulk_of(D_A) + img::d::WORDS_OFF + 5 * 4;
+        let owner = self.k.call(D_A, img::d::OWNER, &[5]);
+        let guest_sum = self.k.call(D_A, img::d::SUM, &[]);
+        let kernel_sum = self.k.call(D_A, img::d::KERNEL_SUM, &[]);
+        let word = p.ok().and_then(|p| self.peek(p));
+        let direct = match p {
+            Ok(p) if self.k.real_addresses() => unsafe {
+                Some(core::ptr::read_volatile(p as usize as *const u32))
+            },
+            _ => None,
+        };
+        let ok = p == Ok(want)
+            && owner == Ok(D_A as u32 + 1)
+            && guest_sum.is_ok()
+            && kernel_sum == guest_sum
+            && word.is_some()
+            && (!self.k.real_addresses() || direct == word);
+        self.check(
+            "17-bulk-real-pointer",
+            ok,
+            format_args!(
+                "ptr={p:?} bulk+off={want:#x} owner={owner:?} kernel_sum={kernel_sum:?} guest_sum={guest_sum:?} real={} direct_read={direct:?}",
+                self.k.real_addresses() as u8
+            ),
+        );
+    }
+
+    /// 18. An applet whose bulk segment doesn't fit in free RAM is rejected
+    /// before anything changes (its gp window alone would fit).
+    fn bulk_fit(&mut self) {
+        let free = self.k.free_ram();
+        let entries = self.k.registry.len();
+        let size = free + 1;
+        let big = Manifest {
+            bulk: Segment {
+                size,
+                ..img::d::MANIFEST.bulk
+            },
+            bulk_slots: bulk_slots(size),
+            gp: Segment {
+                size: img::d::MANIFEST.gp.size.max(4 * bulk_slots(size)),
+                ..img::d::MANIFEST.gp
+            },
+            ..img::d::MANIFEST
+        };
+        let r = self.k.load(BULK_FIT, &big);
+        let ok = matches!(r, Err(Error::NoRoom { need, free: f }) if f == free && need > free)
+            && self.k.free_ram() == free
+            && self.k.registry.len() == entries
+            && self.k.applets[BULK_FIT as usize].is_none();
+        self.check("18-bulk-fit", ok, format_args!("free={free} bulk={size} result={r:?}"));
+    }
+
+    /// 19. The 7c applets' source uses only ordinary statics (checked at
+    /// build time by build_applets.py; the counts are in the generated image).
+    fn no_annotations(&mut self) {
+        let ok = img::PLAIN_STATICS > 0 && img::ANNOTATED_STATICS == 0;
+        self.check(
+            "19-no-annotations",
+            ok,
+            format_args!(
+                "plain_statics={} annotated={}",
+                img::PLAIN_STATICS,
+                img::ANNOTATED_STATICS
+            ),
+        );
+    }
+}
+
+/// FNV-1a 32 of D's buffer after `d_fill`: a xorshift32 stream from `x`.
+fn d_checksum(mut x: u32) -> u32 {
+    let mut s = 0x811c_9dc5u32;
+    for _ in 0..4096 {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        for b in x.to_le_bytes() {
+            s = (s ^ b as u32).wrapping_mul(0x0100_0193);
+        }
+    }
+    s
 }
 
 fn fmt_delta(d: u32) -> Line {
@@ -605,7 +851,7 @@ impl Write for Line {
 
 /// Report lines, kept until the kernel releases the output sink.
 pub struct Lines {
-    l: [Line; 40],
+    l: [Line; 48],
     n: usize,
 }
 

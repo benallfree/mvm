@@ -29,11 +29,11 @@ Each figure is the extra cost of one call over the same loop without it, so loop
 
 | Call | x86 host | ×guest | Unicorn (Cortex-M4 cost table) | ×guest | Renode nRF52840 | ×guest | QEMU ESP32-S3 | ×guest |
 |---|---|---|---|---|---|---|---|---|
-| kernel.nop.v1 | 4 | 1.5 | 211 | 7.1 | 58 | 5.1 | 4 | 3.4 |
-| kernel.uart.write.v1 (16 B, console muted) | 4 | 1.8 | 326 | 11.0 | 97 | 8.5 | 7 | 5.2 |
-| applet op test.echo.v1 (len 0, A's work ~1 instr) | 8 | 3.5 | 585 | 19.7 | 192 | 16.8 | 14 | 10.8 |
-| each extra nesting level (test.recurse.v1) | 81 | 34.7 | 1445 | 48.8 | 530 | 46.4 | 54 | 41.3 |
-| host -> guest entry (Kernel::call, empty body) | 14 | 6.0 | 458 | 15.5 | 159 | 13.9 | 13 | 9.9 |
+| kernel.nop.v1 | 4 | 1.5 | 215 | 7.3 | 58 | 5.1 | 4 | 3.4 |
+| kernel.uart.write.v1 (16 B, console muted) | 4 | 1.7 | 331 | 11.2 | 97 | 8.5 | 7 | 5.2 |
+| applet op test.echo.v1 (len 0, A's work ~1 instr) | 6 | 2.6 | 599 | 20.2 | 192 | 16.8 | 14 | 10.8 |
+| each extra nesting level (test.recurse.v1) | 118 | 50.2 | 1459 | 49.3 | 530 | 46.4 | 54 | 41.3 |
+| host -> guest entry (Kernel::call, empty body) | 15 | 6.3 | 467 | 15.8 | 159 | 13.9 | 13 | 9.9 |
 | *one interpreted guest instruction* | 2.3 | 1 | 29.6 | 1 | 11.4 | 1 | 1.3 | 1 |
 
 Units: x86 host: ns (wall clock); Unicorn (Cortex-M4 cost table): est. M4 cycles; Renode nRF52840: DWT units (= instrs x 0.64); QEMU ESP32-S3: CCOUNT under -icount.
@@ -42,32 +42,32 @@ Units: x86 host: ns (wall clock); Unicorn (Cortex-M4 cost table): est. M4 cycles
 
 | Call | Round 7 cycles | ×guest | 7b cycles | ×guest | Change |
 |---|---|---|---|---|---|
-| kernel.nop.v1 | 216 | 7.5 | 211 | 7.1 | -2% |
-| kernel.uart.write.v1 (16 B, console muted) | 670 | 23.1 | 326 | 11.0 | -51% |
-| applet op test.echo.v1 (len 0, A's work ~1 instr) | 729 | 25.1 | 585 | 19.7 | -20% |
-| each extra nesting level (test.recurse.v1) | 902 | 31.1 | 1445 | 48.8 | +60% |
-| host -> guest entry (Kernel::call, empty body) | 564 | 19.4 | 458 | 15.5 | -19% |
+| kernel.nop.v1 | 216 | 7.5 | 215 | 7.3 | -0% |
+| kernel.uart.write.v1 (16 B, console muted) | 670 | 23.1 | 331 | 11.2 | -51% |
+| applet op test.echo.v1 (len 0, A's work ~1 instr) | 729 | 25.1 | 599 | 20.2 | -18% |
+| each extra nesting level (test.recurse.v1) | 902 | 31.1 | 1459 | 49.3 | +62% |
+| host -> guest entry (Kernel::call, empty body) | 564 | 19.4 | 467 | 15.8 | -17% |
 | *one interpreted guest instruction* | 29.0 | 1 | 29.6 | 1 | +2% |
 
-The nesting row is not like for like: each level of `test.recurse.v1` now runs 28 guest instructions instead of 7 (it fills a 32-byte frame so the shared-stack test has something to measure). Taking out those 21 instructions (×29.6) leaves **823 cycles (27.8 ×guest)** of kernel cost per level, against 902 (31.1 ×guest) in round seven.
+The nesting row is not like for like: each level of `test.recurse.v1` now runs 28 guest instructions instead of 7 (it fills a 32-byte frame so the shared-stack test has something to measure). Taking out those 21 instructions (×29.6) leaves **837 cycles (28.3 ×guest)** of kernel cost per level, against 902 (31.1 ×guest) in round seven.
 
 ## Memory and load time
 
 - Registry entry: **32 B** on Thumb (8 B hash, 8 B name slice into the applet image, the provider, 4 B reserved hook range, enum/Option padding); 48 B on x86-64.
 - Whole registry (32 entries + 64-bucket index): **1160 B** on Thumb.
-- Per-applet record: **48 B** (16 import slots × 2 B, slot count, code region, static block address and length, gp).
-- Loading H, A and B (11 imports, 3 exports): x86 host 3221 per applet, Unicorn (Cortex-M4 cost table) 8453 per applet, Renode nRF52840 2981 per applet, QEMU ESP32-S3 169 per applet.
-- Host stack per nesting level: **232 B** on Thumb (`run_guest`'s frame; round seven 464 B). Deepest host stack in the whole Unicorn run (includes 7 nested levels): 29668 B.
+- Per-applet record: **56 B** (16 import slots × 2 B, slot count, code region, static block address and length, gp).
+- Loading H, A and B (11 imports, 3 exports): x86 host 3211 per applet, Unicorn (Cortex-M4 cost table) 9066 per applet, Renode nRF52840 2981 per applet, QEMU ESP32-S3 169 per applet.
+- Host stack per nesting level: **232 B** on Thumb (`run_guest`'s frame; round seven 464 B). Deepest host stack in the whole Unicorn run (includes 7 nested levels): 34500 B.
 
 ## Memory model (7b)
 
 - Shared guest stack, Unicorn: `peak_depth2=48 peak_depth7=288 per_level=48 stack=8192` (bytes; one 8 KB stack for every applet and level; round seven gave each level its own 2048 B).
 - Shared stack per level on each target: x86 host 48 B, Unicorn (Cortex-M4 cost table) 48 B, Renode nRF52840 48 B, QEMU ESP32-S3 48 B.
 - Register files: 8 (one per nesting level) × 256 B, owned by the kernel and reused, not cleared, per call.
-- Fit check: `free=8108 result=Err(NoRoom { need: 8109, free: 8108 })`.
-- Position independence: `flash=0x31e80,0x31da0 ram=0x2000220c,0x20002228 image_fnv=0xe8f3986735e4d4f4 identical=1 gp_accesses=5 abs_ptrs=2`.
+- Fit check: `free=49068 result=Err(NoRoom { need: 49100, free: 49068 })`.
+- Position independence: `flash=0x34700,0x34620 ram=0x2000220c,0x20002228 image_fnv=0x75b8426eb689f7cb identical=1 gp_accesses=5 abs_ptrs=2`.
 - Two instances: `same_flash=1 blocks=0x2000220c,0x20002244 counts=Ok(3),Ok(1)`.
-- Real pointers: `ptr=Ok(536879628) block+off=0x2000220c owner=Ok(7) real=1 direct_read=Some(3)`.
+- Real pointers: `ptr=Ok(536879652) block+off=0x20002224 owner=Ok(7) real=1 direct_read=Some(3)`.
 
 Per-applet sizes (flash image = code + rodata, never patched; static block = .data + .bss, in RAM):
 
@@ -81,9 +81,9 @@ Per-applet sizes (flash image = code + rodata, never patched; static block = .da
 | s1 | 112 | 0 | 448 |
 | s2 | 112 | 0 | 448 |
 | s3 | 36 | 0 | 144 |
-| c | 196 | 28 | 784 |
+| c | 196 | 24 | 784 |
 
-RAM per loaded applet = static block + the `Applet` record (48 B on Thumb). The decode table (8 B per 2-byte halfword of image) belongs to the code region and is shared by every instance of the same image.
+RAM per loaded applet = static block + the `Applet` record (56 B on Thumb). The decode table (8 B per 2-byte halfword of image) belongs to the code region and is shared by every instance of the same image.
 
 ## ESP32-S3 CRC16 baseline (fixed)
 

@@ -14,7 +14,7 @@ const USAGE: &str = "usage:
   chunker names     <objects/rlibs...>   stable-name counts per crate; 8-byte name / 16-byte chunk hash collisions
   chunker manifest  --entry E [--entry E2] [--label L] <objects/rlibs...>   manifest size in three encodings
   chunker link      --entry E [--entry E2] -o OUT <objects/rlibs...>   flat image at 0x1000 (bench only): OUT.bin + OUT.rs
-  chunker link-pic  --entry E [--entry E2] -o OUT <objects/rlibs...>   position-independent: OUT.bin (flash), OUT.static (RAM init), OUT.json
+  chunker link-pic  [--bulk-threshold N] --entry E [--entry E2] -o OUT <objects/rlibs...>   position-independent: OUT.bin (flash), OUT.static (gp window init), OUT.bulk (bulk init), OUT.json
   chunker compare   --entry E <build A inputs...> -- <build B inputs...>    size and shared hashes, A vs B";
 
 fn load(paths: &[String]) -> Result<Store, String> {
@@ -288,44 +288,60 @@ fn link_out(store: &Store, entries: &[String], out: &str) -> Result<(), String> 
     Ok(())
 }
 
-/// Round 7b: link without a base address. See `link::link_pic`.
-fn link_pic_out(store: &Store, entries: &[String], out: &str) -> Result<(), String> {
+/// Rounds 7b/7c: link without a base address. See `link::link_pic`.
+fn link_pic_out(store: &Store, entries: &[String], out: &str, threshold: u32) -> Result<(), String> {
     let roots: Vec<usize> = entries
         .iter()
         .map(|e| store.by_name.get(e).copied().ok_or(format!("no entry {e}")))
         .collect::<Result<_, _>>()?;
-    let img = link::link_pic(store, &roots)?;
+    let img = link::link_pic(store, &roots, threshold)?;
     let w = |p: String, b: &[u8]| std::fs::write(&p, b).map_err(|e| format!("{p}: {e}"));
     w(format!("{out}.bin"), &img.flash)?;
-    w(format!("{out}.static"), &img.static_init)?;
+    w(format!("{out}.static"), &img.gp.init)?;
+    w(format!("{out}.bulk"), &img.bulk.init)?;
     let mut j = String::from("{\n  \"entries\": {");
     for (k, (e, &r)) in entries.iter().zip(&roots).enumerate() {
         let r = store.canonical(r);
-        let (area, off) = match (img.flash_off.get(&r), img.static_off.get(&r)) {
-            (Some(o), _) => ("flash", *o),
-            (_, Some(o)) => ("static", *o),
-            _ => return Err(format!("{e} was not placed")),
-        };
-        j += &format!("{}\n    \"{e}\": [\"{area}\", {off}]", if k > 0 { "," } else { "" });
+        let (seg, off) = img.off.get(&r).ok_or(format!("{e} was not placed"))?;
+        j += &format!("{}\n    \"{e}\": [\"{}\", {off}]", if k > 0 { "," } else { "" }, seg.name());
     }
     j += &format!(
-        "\n  }},\n  \"flash_len\": {},\n  \"static_size\": {},\n  \"static_align\": {},\n  \"gp_rewrites\": {},",
+        "\n  }},\n  \"flash_len\": {},\n  \"gp_size\": {},\n  \"gp_align\": {},\n  \"bulk_size\": {},\n  \"bulk_align\": {},\n  \"bulk_slots\": {},\n  \"threshold\": {threshold},\n  \"gp_rewrites\": {},\n  \"bulk_rewrites\": {},",
         img.flash.len(),
-        img.static_size,
-        img.static_align,
-        img.gp_rewrites
+        img.gp.size,
+        img.gp.align,
+        img.bulk.size,
+        img.bulk.align,
+        img.bulk_slots,
+        img.gp_rewrites,
+        img.bulk_rewrites,
     );
-    let relocs: Vec<String> = img.data_relocs.iter().map(|(a, s, o)| format!("[{a}, {s}, {o}]")).collect();
+    let relocs: Vec<String> = img
+        .data_relocs
+        .iter()
+        .map(|(s, a, t, o)| format!("[\"{}\", {a}, \"{}\", {o}]", s.name(), t.name()))
+        .collect();
     j += &format!("\n  \"data_relocs\": [{}],", relocs.join(", "));
+    let placed: Vec<String> = img
+        .placed
+        .iter()
+        .map(|p| format!("[{:?}, {}, \"{}\", {}, \"{}\"]", p.origin, p.size, p.seg.name(), p.off, p.why))
+        .collect();
+    j += &format!("\n  \"placed\": [{}],", placed.join(", "));
     let abs: Vec<String> = img.abs_flash.iter().map(|(c, o)| format!("[\"{c}\", {o}]")).collect();
     j += &format!("\n  \"abs_flash\": [{}]\n}}\n", abs.join(", "));
     w(format!("{out}.json"), j.as_bytes())?;
+    let spilled = img.placed.iter().filter(|p| p.why == "spill").count();
     println!(
-        "flash {} bytes, statics {} bytes (align {}), {} gp-relative accesses, {} data relocs, {} absolute pointers in flash",
+        "flash {} bytes, gp window {} bytes ({} slots), bulk {} bytes ({} statics, {} spilled), {} gp / {} bulk accesses, {} data relocs, {} absolute pointers in flash",
         img.flash.len(),
-        img.static_size,
-        img.static_align,
+        img.gp.size,
+        img.bulk_slots,
+        img.bulk.size,
+        img.placed.iter().filter(|p| p.seg == link::Seg::Bulk).count(),
+        spilled,
         img.gp_rewrites,
+        img.bulk_rewrites,
         img.data_relocs.len(),
         img.abs_flash.len()
     );
@@ -343,12 +359,19 @@ fn main() {
     };
     let (mut entries, mut label, mut inputs) = (Vec::new(), String::from("build"), Vec::new());
     let mut out = String::from("image");
+    let mut threshold = mvm_abi::BULK_THRESHOLD;
     let mut it = rest.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--entry" => entries.push(it.next().expect("--entry needs a value").clone()),
             "--label" => label = it.next().expect("--label needs a value").clone(),
             "-o" => out = it.next().expect("-o needs a value").clone(),
+            "--bulk-threshold" => {
+                threshold = it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .expect("--bulk-threshold needs a byte count")
+            }
 
             _ => inputs.push(a.clone()),
         }
@@ -370,7 +393,7 @@ fn main() {
     let res = load(&inputs).and_then(|mut store| match cmd {
         "names" => report::names(&mut store),
         "link" => link_out(&store, &entries, &out),
-        "link-pic" => link_pic_out(&store, &entries, &out),
+        "link-pic" => link_pic_out(&store, &entries, &out, threshold),
         "applet-roundtrip" => applet_roundtrip(&store),
         "manifest" => report::manifest(&mut store, &label, &entries),
         "dump" => {

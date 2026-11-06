@@ -15,15 +15,18 @@
 //! Memory model (round 7b): guest pointers are real addresses (on 32-bit
 //! chips; the 64-bit x86 test host uses stand-in addresses), code is never
 //! patched, each applet's statics live in a RAM block reached through `gp`.
+//! Round 7c: two RAM segments per applet, the gp window (at most 4 KB) and a
+//! bulk segment of any size reached through bulk slots in the window. See
+//! BULK.md.
 
 use interp::fast::{self, Cpu, Stop};
 use interp::{Fault, Mem, Region};
-use mvm_abi::{call, names};
-pub use mvm_abi::{fnv1a64, fnv1a64_bytes, GP_BIAS, KERNEL_NAMESPACE};
+use mvm_abi::{call, names, BULK_BIAS, BULK_PAGE, GP_WINDOW};
+pub use mvm_abi::{bulk_slots, fnv1a64, fnv1a64_bytes, GP_BIAS, KERNEL_NAMESPACE};
 
 pub const MAX_ENTRIES: usize = 32;
 const BUCKETS: usize = 64; // power of two, >= 2 x MAX_ENTRIES
-pub const MAX_APPLETS: usize = 12;
+pub const MAX_APPLETS: usize = 16;
 /// Distinct flash images loaded (instances of one image share a region).
 pub const MAX_REGIONS: usize = 12;
 pub const MAX_SLOTS: usize = 16;
@@ -82,15 +85,31 @@ pub struct Export<'a> {
     pub entry: u32,
 }
 
+/// Where something lives: the flash image, the gp window or the bulk segment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Seg {
+    Flash,
+    Gp,
+    Bulk,
+}
+
 /// A pointer stored in the applet's statics, fixed up in RAM at load.
 #[derive(Clone, Copy)]
 pub struct DataReloc {
-    /// Offset of the 32-bit word in the static block.
+    /// The segment holding the 32-bit word (`Gp` or `Bulk`) and its offset there.
+    pub seg: Seg,
     pub at: u32,
-    /// The target is in the static block (else in the flash image).
-    pub to_static: bool,
-    /// Offset of the target in its area.
+    /// The segment the pointer targets, and the offset in it.
+    pub to: Seg,
     pub off: u32,
+}
+
+/// A RAM segment: size, alignment and initial bytes (a prefix; the rest is zeroed).
+#[derive(Clone, Copy)]
+pub struct Segment<'a> {
+    pub size: u32,
+    pub align: u32,
+    pub init: &'a [u8],
 }
 
 /// Everything the kernel needs to know about an applet, without running it.
@@ -98,10 +117,12 @@ pub struct DataReloc {
 pub struct Manifest<'a> {
     /// The flash image (code + rodata), position independent.
     pub image: &'a [u8],
-    pub static_size: u32,
-    pub static_align: u32,
-    /// Initial contents of the static block (`.data`, zeros for `.bss`).
-    pub static_init: &'a [u8],
+    /// Small statics, reached `gp`-relative (at most 4 KB, bulk slots first).
+    pub gp: Segment<'a>,
+    /// Large statics, reached through the bulk slots (any size).
+    pub bulk: Segment<'a>,
+    /// Number of bulk slots at the start of the gp window.
+    pub bulk_slots: u32,
     pub data_relocs: &'a [DataReloc],
     pub imports: &'a [Import<'a>],
     pub exports: &'a [Export<'a>],
@@ -222,10 +243,13 @@ impl<'a> Registry<'a> {
 pub struct Applet {
     /// Its flash image's code region.
     pub region: u8,
-    /// Its static block (guest address, length) and its `gp`.
+    /// Its gp window (guest address, length) and its `gp`.
     pub block: u32,
     pub block_len: u32,
     pub gp: u32,
+    /// Its bulk segment (guest address, length; 0 if none).
+    pub bulk: u32,
+    pub bulk_len: u32,
     /// Import slot -> registry entry.
     pub slots: [u16; MAX_SLOTS],
     pub nslots: u8,
@@ -365,8 +389,14 @@ fn op_mem_owner(k: &mut Kernel, a: [u32; 6]) -> Result<[u32; 2], Error> {
     Ok([owner, 0])
 }
 
-fn align_up(v: u32, a: u32) -> u32 {
-    v.div_ceil(a) * a
+/// FNV-1a 32 of `len` bytes at a guest pointer, read by the kernel.
+fn op_mem_sum(k: &mut Kernel, a: [u32; 6]) -> Result<[u32; 2], Error> {
+    let b = k.guest_bytes(a[0], a[1]).ok_or(Error::BadPointer(a[0]))?;
+    let mut s = 0x811c_9dc5u32;
+    for &x in b {
+        s = (s ^ x as u32).wrapping_mul(0x0100_0193);
+    }
+    Ok([s, 0])
 }
 
 impl<'a> Kernel<'a> {
@@ -401,11 +431,12 @@ impl<'a> Kernel<'a> {
             #[cfg(feature = "count")]
             steps: 0,
         };
-        let ops: [(&'static str, NativeFn); 4] = [
+        let ops: [(&'static str, NativeFn); 5] = [
             (names::UART_WRITE, op_uart_write),
             (names::TIMER_NOW, op_timer_now),
             (names::NOP, op_nop),
             (names::MEM_OWNER, op_mem_owner),
+            (names::MEM_SUM, op_mem_sum),
         ];
         for (name, f) in ops {
             k.registry.register(
@@ -439,11 +470,12 @@ impl<'a> Kernel<'a> {
         guest_bytes_in(self.ram, self.ram_base, &self.views[..self.nviews], ptr, len)
     }
 
-    /// The applet whose static block holds `ptr`.
+    /// The applet whose gp window or bulk segment holds `ptr`.
     pub fn owner_of(&self, ptr: u32) -> Option<u8> {
         self.applets.iter().enumerate().find_map(|(i, a)| {
             let a = (*a)?;
-            (ptr.wrapping_sub(a.block) < a.block_len).then_some(i as u8)
+            (ptr.wrapping_sub(a.block) < a.block_len || ptr.wrapping_sub(a.bulk) < a.bulk_len)
+                .then_some(i as u8)
         })
     }
 
@@ -491,19 +523,29 @@ impl<'a> Kernel<'a> {
         if m.imports.len() > MAX_SLOTS {
             return Err(Error::TooManyImports(m.imports.len() as u32));
         }
-        if m.static_init.len() as u32 > m.static_size
-            || m.static_align == 0
+        let seg_ok = |g: &Segment| g.init.len() as u32 <= g.size && g.align.is_power_of_two();
+        if !seg_ok(&m.gp)
+            || !seg_ok(&m.bulk)
+            || m.gp.size > GP_WINDOW
+            || m.bulk_slots != bulk_slots(m.bulk.size)
+            || m.gp.size < 4 * m.bulk_slots
             || !m.image.len().is_multiple_of(2)
         {
             return Err(Error::BadManifest);
         }
-        // 1. Fit.
-        let start = align_up(self.ram_base + self.ram_used, m.static_align) - self.ram_base;
-        let need = start - self.ram_used + m.static_size;
+        // 1. Fit: the gp window, then the bulk segment, both from free RAM.
+        // (u64: a huge manifest size must fail the check, not wrap.)
+        let base = self.ram_base as u64;
+        let up = |v: u64, a: u32| v.div_ceil(a as u64) * a as u64;
+        let gp_at = up(base + self.ram_used as u64, m.gp.align);
+        let bulk_at = up(gp_at + m.gp.size as u64, m.bulk.align);
+        let end = bulk_at + m.bulk.size as u64;
+        let need = (end - base - self.ram_used as u64).min(u32::MAX as u64) as u32;
         let free = self.free_ram();
         if need > free {
             return Err(Error::NoRoom { need, free });
         }
+        let (start, bulk_start) = ((gp_at - base) as u32, (bulk_at - base) as u32);
         let region = self.region_of(m.image);
         if region.is_none()
             && (self.table_free.len() < m.image.len() / 2
@@ -562,24 +604,39 @@ impl<'a> Kernel<'a> {
             .as_ref()
             .map(|c| c.base)
             .unwrap_or(0);
-        // 4. Static block: initialise, zero the rest, apply pointer fix-ups.
+        // 4. Segments: initialise, zero the rest, write the bulk slots, apply
+        // pointer fix-ups.
         let block = self.ram_base + start;
-        let s = start as usize;
-        let blk = &mut self.ram[s..s + m.static_size as usize];
-        blk.fill(0);
-        blk[..m.static_init.len()].copy_from_slice(m.static_init);
-        for d in m.data_relocs {
-            let v = if d.to_static {
-                block + d.off
-            } else {
-                code_base + d.off
-            };
-            let at = d.at as usize;
-            blk.get_mut(at..at + 4)
-                .ok_or(Error::BadManifest)?
-                .copy_from_slice(&v.to_le_bytes());
+        let bulk = self.ram_base + bulk_start;
+        for (at, g) in [(start, &m.gp), (bulk_start, &m.bulk)] {
+            let seg = &mut self.ram[at as usize..(at + g.size) as usize];
+            seg.fill(0);
+            seg[..g.init.len()].copy_from_slice(g.init);
         }
-        self.ram_used = start + m.static_size;
+        let mut put = |seg_at: u32, seg_len: u32, at: u32, v: u32| -> Result<(), Error> {
+            if at.checked_add(4).is_none_or(|e| e > seg_len) {
+                return Err(Error::BadManifest);
+            }
+            let a = (seg_at + at) as usize;
+            self.ram[a..a + 4].copy_from_slice(&v.to_le_bytes());
+            Ok(())
+        };
+        for k in 0..m.bulk_slots {
+            put(start, m.gp.size, 4 * k, bulk + BULK_PAGE * k + BULK_BIAS)?;
+        }
+        for d in m.data_relocs {
+            let v = match d.to {
+                Seg::Flash => code_base,
+                Seg::Gp => block,
+                Seg::Bulk => bulk,
+            } + d.off;
+            match d.seg {
+                Seg::Gp => put(start, m.gp.size, d.at, v)?,
+                Seg::Bulk => put(bulk_start, m.bulk.size, d.at, v)?,
+                Seg::Flash => return Err(Error::BadManifest),
+            }
+        }
+        self.ram_used = bulk_start + m.bulk.size;
         // 5. Exports, then imports (an applet may import what it exports).
         for e in m.exports {
             let p = Provider::Guest {
@@ -592,8 +649,10 @@ impl<'a> Kernel<'a> {
         let mut a = Applet {
             region: r,
             block,
-            block_len: m.static_size,
+            block_len: m.gp.size,
             gp: block + GP_BIAS,
+            bulk,
+            bulk_len: m.bulk.size,
             slots: [u16::MAX; MAX_SLOTS],
             nslots: m.imports.len() as u8,
         };

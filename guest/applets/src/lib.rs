@@ -14,6 +14,9 @@
 pub use mvm_abi::fnv1a64;
 use mvm_abi::manifest;
 
+/// Round 7c applets (D, E): bulk statics.
+pub mod bulk;
+
 /// One import: 16 bytes (name hash, then the full name's address and length,
 /// so the kernel can check the hash and the name it resolves to).
 #[repr(C)]
