@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 applet = { version = "0.1.0", path = "../guest/applet" }
+mvm-abi = { version = "0.1.0", path = "../abi" }
 object = { version = "0.36", default-features = false, features = ["read_core", "elf", "archive", "std"] }
 sha2 = "0.11.1"
 testcrate = { version = "0.1.0", path = "../guest/testcrate" }

@@ -1,30 +1,34 @@
 #![no_std]
-//! The MVM kernel's mesh-op layer (round seven). See MESHOPS.md.
+//! The MVM kernel's mesh-op layer (rounds 7 and 7b). See MESHOPS.md and MEMMODEL.md.
 //!
-//! - [`Registry`]: name hash -> entry. Entries keep the full name: the hash is
-//!   only an index, and names are what get compared, so a crafted FNV
-//!   collision can't shadow an op. Entries never move once added, so a
-//!   resolved import can hold an entry index (a "live binding").
-//! - [`Kernel::load`]: reads an applet's import/export tables from its image,
-//!   checks them, registers its exports, and resolves its imports into a slot table.
-//! - [`Kernel::call`]: runs guest code; each `ecall` looks up the slot (no
-//!   hashing, no name compare) and runs the provider, native or guest. Guest
-//!   providers re-enter the interpreter with a fresh register file, one level deeper.
+//! - [`Registry`]: name hash -> entry; entries keep the full name (the hash is
+//!   only an index), and never move, so imports bind to entry indices.
+//! - [`Kernel::load`]: takes an applet's [`Manifest`] (first-class: static
+//!   size/alignment, imports and exports with full names), checks it all
+//!   (including that it fits) before changing anything, places its static
+//!   block in RAM, and binds its imports.
+//! - [`Kernel::call`]: runs guest code on the one kernel-owned stack; each
+//!   `ecall` looks up the slot (no hashing) and runs the provider, native or
+//!   guest. Guest providers run one nesting level deeper, on the caller's
+//!   stack, with their own `gp`.
+//!
+//! Memory model (round 7b): guest pointers are real addresses (on 32-bit
+//! chips; the 64-bit x86 test host uses stand-in addresses), code is never
+//! patched, each applet's statics live in a RAM block reached through `gp`.
 
 use interp::fast::{self, Cpu, Stop};
-use interp::{Fault, Mem};
-
-use mvm_abi::{call, manifest, names};
-pub use mvm_abi::{fnv1a64, fnv1a64_bytes, KERNEL_NAMESPACE};
+use interp::{Fault, Mem, Region};
+use mvm_abi::{call, names};
+pub use mvm_abi::{fnv1a64, fnv1a64_bytes, GP_BIAS, KERNEL_NAMESPACE};
 
 pub const MAX_ENTRIES: usize = 32;
 const BUCKETS: usize = 64; // power of two, >= 2 x MAX_ENTRIES
-pub const MAX_APPLETS: usize = 8;
+pub const MAX_APPLETS: usize = 12;
+/// Distinct flash images loaded (instances of one image share a region).
+pub const MAX_REGIONS: usize = 12;
 pub const MAX_SLOTS: usize = 16;
 /// Calls into guest providers nest at most this deep (the outermost call is depth 0).
 pub const MAX_DEPTH: usize = 8;
-/// Guest stack per nesting level, carved from the top of guest RAM.
-pub const STACK_PER_LEVEL: u32 = 2048;
 
 /// What a native op gets: its arguments and access to the kernel (guest memory, console).
 pub type NativeFn = fn(&mut Kernel, [u32; 6]) -> Result<[u32; 2], Error>;
@@ -32,10 +36,14 @@ pub type NativeFn = fn(&mut Kernel, [u32; 6]) -> Result<[u32; 2], Error>;
 #[derive(Clone, Copy)]
 pub enum Provider {
     Native(NativeFn),
-    Guest { applet: u8, entry: u32 },
+    /// Applet `applet`'s code at absolute address `entry`.
+    Guest {
+        applet: u8,
+        entry: u32,
+    },
 }
 
-/// Reserved for middleware: a range in a future hook pool. Always empty this round.
+/// Reserved for middleware: a range in a future hook pool. Always empty so far.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct Hooks {
     pub first: u16,
@@ -45,7 +53,7 @@ pub struct Hooks {
 #[derive(Clone, Copy)]
 pub struct Entry<'a> {
     pub hash: u64,
-    /// The full name: a slice of the code blob, or `'static` for kernel ops.
+    /// The full name (from a manifest, or `'static` for kernel ops).
     pub name: &'a [u8],
     pub provider: Provider,
     pub hooks: Hooks,
@@ -56,6 +64,47 @@ pub struct Entry<'a> {
 pub enum Owner {
     Kernel,
     Applet(u8),
+}
+
+// ---- Manifests (first-class; produced by the build, see build_applets.py) ----
+
+#[derive(Clone, Copy)]
+pub struct Import<'a> {
+    pub hash: u64,
+    pub name: &'a str,
+}
+
+#[derive(Clone, Copy)]
+pub struct Export<'a> {
+    pub hash: u64,
+    pub name: &'a str,
+    /// Offset of the function in the applet's flash image.
+    pub entry: u32,
+}
+
+/// A pointer stored in the applet's statics, fixed up in RAM at load.
+#[derive(Clone, Copy)]
+pub struct DataReloc {
+    /// Offset of the 32-bit word in the static block.
+    pub at: u32,
+    /// The target is in the static block (else in the flash image).
+    pub to_static: bool,
+    /// Offset of the target in its area.
+    pub off: u32,
+}
+
+/// Everything the kernel needs to know about an applet, without running it.
+#[derive(Clone, Copy)]
+pub struct Manifest<'a> {
+    /// The flash image (code + rodata), position independent.
+    pub image: &'a [u8],
+    pub static_size: u32,
+    pub static_align: u32,
+    /// Initial contents of the static block (`.data`, zeros for `.bss`).
+    pub static_init: &'a [u8],
+    pub data_relocs: &'a [DataReloc],
+    pub imports: &'a [Import<'a>],
+    pub exports: &'a [Export<'a>],
 }
 
 /// Open-addressed hash index over an append-only entry array.
@@ -168,11 +217,25 @@ impl<'a> Registry<'a> {
     }
 }
 
-/// One loaded applet: its slot table maps import slot -> registry entry.
+/// One loaded applet.
 #[derive(Clone, Copy)]
 pub struct Applet {
+    /// Its flash image's code region.
+    pub region: u8,
+    /// Its static block (guest address, length) and its `gp`.
+    pub block: u32,
+    pub block_len: u32,
+    pub gp: u32,
+    /// Import slot -> registry entry.
     pub slots: [u16; MAX_SLOTS],
     pub nslots: u8,
+}
+
+/// A flash image loaded once (shared by every instance of that applet).
+struct CodeRegion<'a> {
+    base: u32,
+    bytes: &'a [u8],
+    table: &'a mut [fast::E],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,14 +250,23 @@ pub enum Error {
     ReservedNamespace(u64),
     /// A different name already has this hash (crafted or accidental collision).
     HashCollision(u64),
+    /// The applet's statics (`need` bytes with alignment padding) don't fit
+    /// in the `free` RAM left below the stack. Checked before anything changes.
+    NoRoom {
+        need: u32,
+        free: u32,
+    },
+    /// No decode-table space (or region slot) left for another flash image.
+    NoCodeRoom,
     RegistryFull,
     TooManyImports(u32),
     BadAppletId(u8),
+    BadManifest,
     /// A call would nest deeper than MAX_DEPTH.
     DepthExceeded(usize),
     /// `ecall` with a slot the applet doesn't have.
     BadSlot(u32),
-    /// Memory outside guest RAM or the code blob (op arguments, manifest names).
+    /// Memory outside guest RAM or any loaded flash image.
     BadPointer(u32),
     Fault(Fault),
 }
@@ -210,22 +282,38 @@ pub trait Console {
     fn write(&mut self, bytes: &[u8]);
 }
 
-pub struct LoadStats {
-    pub imports: u32,
-    pub exports: u32,
+/// Guest addresses are real addresses on 32-bit chips. A 64-bit host can't
+/// hand out 32-bit pointers, so it uses stand-ins (the only host-specific
+/// line; the interpreter and registry don't change).
+const REAL_ADDRESSES: bool = usize::BITS == 32;
+const HOST_RAM_BASE: u32 = 0x2000_0000;
+const HOST_FLASH_BASE: u32 = 0x0100_0000;
+
+fn addr_of(bytes: &[u8], stand_in: u32) -> u32 {
+    if REAL_ADDRESSES {
+        bytes.as_ptr() as usize as u32
+    } else {
+        stand_in
+    }
 }
 
 pub struct Kernel<'a> {
     pub registry: Registry<'a>,
     pub applets: [Option<Applet>; MAX_APPLETS],
-    /// All applet images, back to back (one read-only code region).
-    pub blob: &'a [u8],
-    pub blob_base: u32,
-    /// Shared guest RAM (buffers and the per-level stacks).
-    pub ram: &'a mut [u8],
+    regions: [Option<CodeRegion<'a>>; MAX_REGIONS],
+    /// Read-only views of every region, for loads that leave the current one.
+    views: [Region<'a>; MAX_REGIONS],
+    nviews: usize,
+    /// Decode tables not yet handed to a region.
+    table_free: &'a mut [fast::E],
+    /// The RAM arena: applet static blocks from the bottom, the one shared
+    /// stack (`stack_size` bytes) at the top.
+    ram: &'a mut [u8],
     pub ram_base: u32,
-    /// One decode table for the whole blob.
-    pub table: &'a mut [fast::E],
+    ram_used: u32,
+    pub stack_size: u32,
+    /// One register file per nesting level, reused call after call.
+    cpus: [Cpu; MAX_DEPTH],
     pub console: &'a mut dyn Console,
     pub now: fn() -> u32,
     /// Deepest nesting reached so far (for the report).
@@ -235,30 +323,33 @@ pub struct Kernel<'a> {
     pub steps: u64,
 }
 
-fn rd32(b: &[u8], o: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(
-        b.get(o..o.checked_add(4)?)?.try_into().ok()?,
-    ))
-}
-fn rd64(b: &[u8], o: usize) -> Option<u64> {
-    Some(u64::from_le_bytes(
-        b.get(o..o.checked_add(8)?)?.try_into().ok()?,
-    ))
-}
-
 fn op_uart_write(k: &mut Kernel, a: [u32; 6]) -> Result<[u32; 2], Error> {
     let (ptr, len) = (a[0], a[1]);
-    k.guest_bytes(ptr, len).ok_or(Error::BadPointer(ptr))?;
-    // Copy out in chunks: the console and guest memory both live in `k`.
-    let mut buf = [0u8; 64];
-    let mut done = 0u32;
-    while done < len {
-        let n = (len - done).min(64);
-        buf[..n as usize].copy_from_slice(k.guest_bytes(ptr + done, n).unwrap());
-        k.console.write(&buf[..n as usize]);
-        done += n;
-    }
+    // One lookup, then write straight from guest memory (split borrow: the
+    // console and guest memory are both fields of `k`).
+    let bytes = guest_bytes_in(&k.ram[..], k.ram_base, &k.views[..k.nviews], ptr, len)
+        .ok_or(Error::BadPointer(ptr))?;
+    k.console.write(bytes);
     Ok([len, 0])
+}
+
+/// `ptr..ptr+len` in RAM or one of the read-only region views.
+fn guest_bytes_in<'b>(
+    ram: &'b [u8],
+    ram_base: u32,
+    views: &'b [Region<'_>],
+    ptr: u32,
+    len: u32,
+) -> Option<&'b [u8]> {
+    let (p, l) = (ptr as usize, len as usize);
+    let r = p.wrapping_sub(ram_base as usize);
+    if r <= ram.len() && l <= ram.len() - r {
+        return Some(&ram[r..r + l]);
+    }
+    views.iter().find_map(|v| {
+        let o = p.wrapping_sub(v.base as usize);
+        (o <= v.bytes.len() && l <= v.bytes.len() - o).then(|| &v.bytes[o..o + l])
+    })
 }
 
 fn op_timer_now(k: &mut Kernel, _: [u32; 6]) -> Result<[u32; 2], Error> {
@@ -269,44 +360,52 @@ fn op_nop(_: &mut Kernel, _: [u32; 6]) -> Result<[u32; 2], Error> {
     Ok([0, 0])
 }
 
-/// Where the import/export tables of one applet are, and how big.
-struct Tables {
-    io: usize,
-    n_imp: u32,
-    eo: usize,
-    n_exp: u32,
+fn op_mem_owner(k: &mut Kernel, a: [u32; 6]) -> Result<[u32; 2], Error> {
+    let owner = k.owner_of(a[0]).map(|id| id as u32 + 1).unwrap_or(0);
+    Ok([owner, 0])
+}
+
+fn align_up(v: u32, a: u32) -> u32 {
+    v.div_ceil(a) * a
 }
 
 impl<'a> Kernel<'a> {
-    /// A kernel with the three kernel ops registered.
+    /// A kernel owning `ram` (statics + the shared stack of `stack_size`
+    /// bytes at the top) and `tables` (decode tables for loaded images).
     pub fn new(
-        blob: &'a [u8],
-        blob_base: u32,
         ram: &'a mut [u8],
-        ram_base: u32,
-        table: &'a mut [fast::E],
+        stack_size: u32,
+        tables: &'a mut [fast::E],
         console: &'a mut dyn Console,
         now: fn() -> u32,
     ) -> Result<Self, Error> {
-        table.fill(fast::E::EMPTY);
+        let ram_base = addr_of(ram, HOST_RAM_BASE);
         let mut k = Kernel {
             registry: Registry::new(),
             applets: [None; MAX_APPLETS],
-            blob,
-            blob_base,
+            regions: [const { None }; MAX_REGIONS],
+            views: [Region {
+                base: 0,
+                bytes: &[],
+            }; MAX_REGIONS],
+            nviews: 0,
+            table_free: tables,
             ram,
             ram_base,
-            table,
+            ram_used: 0,
+            stack_size,
+            cpus: [const { Cpu::new() }; MAX_DEPTH],
             console,
             now,
             max_depth_seen: 0,
             #[cfg(feature = "count")]
             steps: 0,
         };
-        let ops: [(&'static str, NativeFn); 3] = [
+        let ops: [(&'static str, NativeFn); 4] = [
             (names::UART_WRITE, op_uart_write),
             (names::TIMER_NOW, op_timer_now),
             (names::NOP, op_nop),
+            (names::MEM_OWNER, op_mem_owner),
         ];
         for (name, f) in ops {
             k.registry.register(
@@ -319,155 +418,238 @@ impl<'a> Kernel<'a> {
         Ok(k)
     }
 
-    /// The interpreter's view of guest memory, plus the decode table.
-    fn guest(&mut self) -> (Mem<'_>, &mut [fast::E]) {
-        let mem = Mem {
-            image: self.blob,
-            image_base: self.blob_base,
-            ram: &mut *self.ram,
-            ram_base: self.ram_base,
-        };
-        (mem, &mut *self.table)
+    /// True when guest addresses are the chip's real addresses.
+    pub fn real_addresses(&self) -> bool {
+        REAL_ADDRESSES
     }
 
-    fn blob_off(&self, addr: u32) -> usize {
-        addr.wrapping_sub(self.blob_base) as usize
+    /// Bytes of RAM still free for static blocks (the stack is reserved).
+    pub fn free_ram(&self) -> u32 {
+        self.ram.len() as u32 - self.stack_size - self.ram_used
     }
 
-    /// Guest memory as host bytes: RAM or the code blob. Pointers pass straight through.
+    /// The shared stack (for measuring peak use).
+    pub fn stack(&mut self) -> &mut [u8] {
+        let n = self.ram.len();
+        &mut self.ram[n - self.stack_size as usize..]
+    }
+
+    /// Guest memory as host bytes: RAM or a loaded flash image. Pointers pass straight through.
     pub fn guest_bytes(&self, ptr: u32, len: u32) -> Option<&[u8]> {
-        let (p, l) = (ptr as usize, len as usize);
-        let r = p.wrapping_sub(self.ram_base as usize);
-        if r <= self.ram.len() && l <= self.ram.len() - r {
-            return Some(&self.ram[r..r + l]);
-        }
-        let b = p.wrapping_sub(self.blob_base as usize);
-        if b <= self.blob.len() && l <= self.blob.len() - b {
-            return Some(&self.blob[b..b + l]);
-        }
-        None
+        guest_bytes_in(self.ram, self.ram_base, &self.views[..self.nviews], ptr, len)
     }
 
-    /// A name inside the code blob (manifests point into their own image).
-    fn blob_str(&self, addr: u32, len: u32) -> Result<&'a [u8], Error> {
-        let blob: &'a [u8] = self.blob;
-        let o = self.blob_off(addr);
-        blob.get(o..o.wrapping_add(len as usize))
-            .ok_or(Error::BadPointer(addr))
-    }
-
-    /// A u32/u64 field of a manifest table entry at blob offset `o`.
-    fn field32(&self, o: usize) -> Result<u32, Error> {
-        rd32(self.blob, o).ok_or(Error::BadPointer(self.blob_base.wrapping_add(o as u32)))
-    }
-    fn field64(&self, o: usize) -> Result<u64, Error> {
-        rd64(self.blob, o).ok_or(Error::BadPointer(self.blob_base.wrapping_add(o as u32)))
-    }
-
-    /// Import `i`: (hash, name). Layout: `mvm_abi::manifest::import`.
-    fn import(&self, t: &Tables, i: u32) -> Result<(u64, &'a [u8]), Error> {
-        use manifest::import as f;
-        let o = t.io + manifest::HEADER_SIZE + f::SIZE * i as usize;
-        let name = self.blob_str(self.field32(o + f::NAME)?, self.field32(o + f::LEN)?)?;
-        Ok((self.field64(o + f::HASH)?, name))
-    }
-
-    /// Export `j`: (hash, function, name). Layout: `mvm_abi::manifest::export`.
-    fn export(&self, t: &Tables, j: u32) -> Result<(u64, u32, &'a [u8]), Error> {
-        use manifest::export as f;
-        let o = t.eo + manifest::HEADER_SIZE + f::SIZE * j as usize;
-        let name = self.blob_str(self.field32(o + f::NAME)?, self.field32(o + f::LEN)?)?;
-        Ok((self.field64(o + f::HASH)?, self.field32(o + f::FUNC)?, name))
-    }
-
-    /// Load applet `id` from its tables in the blob (`count: u32, _: u32`, then entries).
-    ///
-    /// Everything is checked before anything changes, so a failed load leaves
-    /// the registry as it was:
-    /// - every hash must be the FNV-1a 64 of its name (`NameHashMismatch`);
-    /// - exports may not use `kernel.*` (`ReservedNamespace`), nor reuse a hash
-    ///   held by a different name (`HashCollision`);
-    /// - every import must resolve to an entry *with the same name*, from the
-    ///   registry or the applet's own exports (`Unresolved`, `NameMismatch`).
-    ///
-    /// Then exports are registered and imports bound to entry indices.
-    pub fn load(&mut self, id: u8, imports: u32, exports: Option<u32>) -> Result<LoadStats, Error> {
-        if id as usize >= MAX_APPLETS {
-            return Err(Error::BadAppletId(id));
-        }
-        let io = self.blob_off(imports);
-        let n_imp = rd32(self.blob, io).ok_or(Error::BadPointer(imports))?;
-        if n_imp as usize > MAX_SLOTS {
-            return Err(Error::TooManyImports(n_imp));
-        }
-        let (eo, n_exp) = match exports {
-            Some(e) => {
-                let eo = self.blob_off(e);
-                (eo, rd32(self.blob, eo).ok_or(Error::BadPointer(e))?)
-            }
-            None => (0, 0),
-        };
-        let t = Tables {
-            io,
-            n_imp,
-            eo,
-            n_exp,
-        };
-
-        // 1. Check everything.
-        for j in 0..t.n_exp {
-            let (h, _, name) = self.export(&t, j)?;
-            if fnv1a64_bytes(name) != h {
-                return Err(Error::NameHashMismatch(h));
-            }
-            self.registry.check(h, name, Owner::Applet(id))?;
-        }
-        for i in 0..t.n_imp {
-            let (h, name) = self.import(&t, i)?;
-            if fnv1a64_bytes(name) != h {
-                return Err(Error::NameHashMismatch(h));
-            }
-            let mut own = false;
-            for j in 0..t.n_exp {
-                let (eh, _, en) = self.export(&t, j)?;
-                own |= eh == h && en == name;
-            }
-            if !own {
-                self.registry.resolve(h, name)?;
-            }
-        }
-        // 2. Register exports (last registration wins).
-        for j in 0..t.n_exp {
-            let (h, f, name) = self.export(&t, j)?;
-            self.registry.register(
-                h,
-                name,
-                Provider::Guest {
-                    applet: id,
-                    entry: f,
-                },
-                Owner::Applet(id),
-            )?;
-        }
-        // 3. Bind imports: slot -> entry index. Calls never hash or compare names.
-        let mut a = Applet {
-            slots: [u16::MAX; MAX_SLOTS],
-            nslots: t.n_imp as u8,
-        };
-        for i in 0..t.n_imp {
-            let (h, name) = self.import(&t, i)?;
-            a.slots[i as usize] = self.registry.resolve(h, name)?;
-        }
-        self.applets[id as usize] = Some(a);
-        Ok(LoadStats {
-            imports: t.n_imp,
-            exports: t.n_exp,
+    /// The applet whose static block holds `ptr`.
+    pub fn owner_of(&self, ptr: u32) -> Option<u8> {
+        self.applets.iter().enumerate().find_map(|(i, a)| {
+            let a = (*a)?;
+            (ptr.wrapping_sub(a.block) < a.block_len).then_some(i as u8)
         })
     }
 
-    /// Run guest code of applet `applet` at `entry`, servicing its mesh ops.
+    /// The code region (and its address) for `image`, if already loaded.
+    fn region_of(&self, image: &[u8]) -> Option<u8> {
+        self.regions
+            .iter()
+            .position(|r| {
+                r.as_ref().is_some_and(|r| {
+                    r.bytes.as_ptr() == image.as_ptr() && r.bytes.len() == image.len()
+                })
+            })
+            .map(|i| i as u8)
+    }
+
+    /// The address of offset `off` in applet `id`'s flash image.
+    pub fn code_addr(&self, id: u8, off: u32) -> Option<u32> {
+        let a = (*self.applets.get(id as usize)?)?;
+        Some(
+            self.regions[a.region as usize]
+                .as_ref()?
+                .base
+                .wrapping_add(off),
+        )
+    }
+
+    /// Load applet `id` from its manifest.
+    ///
+    /// Everything is checked before anything changes, so a failed load
+    /// leaves the kernel as it was:
+    /// - the statics fit in free RAM (`NoRoom`), and a new image fits in the
+    ///   decode-table space (`NoCodeRoom`);
+    /// - every hash is the FNV-1a 64 of its name (`NameHashMismatch`);
+    /// - exports don't use `kernel.*` (`ReservedNamespace`) or another name's
+    ///   hash (`HashCollision`);
+    /// - every import resolves, by hash *and* name (`Unresolved`, `NameMismatch`).
+    ///
+    /// Then: the image gets a code region (shared if already loaded), the
+    /// static block is placed, initialised and relocated, `gp` is set,
+    /// exports are registered and imports bound.
+    pub fn load(&mut self, id: u8, m: &Manifest<'a>) -> Result<(), Error> {
+        if id as usize >= MAX_APPLETS {
+            return Err(Error::BadAppletId(id));
+        }
+        if m.imports.len() > MAX_SLOTS {
+            return Err(Error::TooManyImports(m.imports.len() as u32));
+        }
+        if m.static_init.len() as u32 > m.static_size
+            || m.static_align == 0
+            || !m.image.len().is_multiple_of(2)
+        {
+            return Err(Error::BadManifest);
+        }
+        // 1. Fit.
+        let start = align_up(self.ram_base + self.ram_used, m.static_align) - self.ram_base;
+        let need = start - self.ram_used + m.static_size;
+        let free = self.free_ram();
+        if need > free {
+            return Err(Error::NoRoom { need, free });
+        }
+        let region = self.region_of(m.image);
+        if region.is_none()
+            && (self.table_free.len() < m.image.len() / 2
+                || self.regions.iter().all(|r| r.is_some()))
+        {
+            return Err(Error::NoCodeRoom);
+        }
+        // 2. Names.
+        for e in m.exports {
+            if fnv1a64(e.name) != e.hash {
+                return Err(Error::NameHashMismatch(e.hash));
+            }
+            self.registry
+                .check(e.hash, e.name.as_bytes(), Owner::Applet(id))?;
+        }
+        for i in m.imports {
+            if fnv1a64(i.name) != i.hash {
+                return Err(Error::NameHashMismatch(i.hash));
+            }
+            let own = m
+                .exports
+                .iter()
+                .any(|e| e.hash == i.hash && e.name == i.name);
+            if !own {
+                self.registry.resolve(i.hash, i.name.as_bytes())?;
+            }
+        }
+        // 3. Code region (instances of one image share it, and its decode table).
+        let r = match region {
+            Some(r) => r,
+            None => {
+                let slot = self
+                    .regions
+                    .iter()
+                    .position(|r| r.is_none())
+                    .ok_or(Error::NoCodeRoom)?;
+                let tables = core::mem::take(&mut self.table_free);
+                let (table, rest) = tables.split_at_mut(m.image.len() / 2);
+                self.table_free = rest;
+                table.fill(fast::E::EMPTY);
+                let base = addr_of(m.image, HOST_FLASH_BASE + 0x0010_0000 * slot as u32);
+                self.regions[slot] = Some(CodeRegion {
+                    base,
+                    bytes: m.image,
+                    table,
+                });
+                self.views[self.nviews] = Region {
+                    base,
+                    bytes: m.image,
+                };
+                self.nviews += 1;
+                slot as u8
+            }
+        };
+        let code_base = self.regions[r as usize]
+            .as_ref()
+            .map(|c| c.base)
+            .unwrap_or(0);
+        // 4. Static block: initialise, zero the rest, apply pointer fix-ups.
+        let block = self.ram_base + start;
+        let s = start as usize;
+        let blk = &mut self.ram[s..s + m.static_size as usize];
+        blk.fill(0);
+        blk[..m.static_init.len()].copy_from_slice(m.static_init);
+        for d in m.data_relocs {
+            let v = if d.to_static {
+                block + d.off
+            } else {
+                code_base + d.off
+            };
+            let at = d.at as usize;
+            blk.get_mut(at..at + 4)
+                .ok_or(Error::BadManifest)?
+                .copy_from_slice(&v.to_le_bytes());
+        }
+        self.ram_used = start + m.static_size;
+        // 5. Exports, then imports (an applet may import what it exports).
+        for e in m.exports {
+            let p = Provider::Guest {
+                applet: id,
+                entry: code_base + e.entry,
+            };
+            self.registry
+                .register(e.hash, e.name.as_bytes(), p, Owner::Applet(id))?;
+        }
+        let mut a = Applet {
+            region: r,
+            block,
+            block_len: m.static_size,
+            gp: block + GP_BIAS,
+            slots: [u16::MAX; MAX_SLOTS],
+            nslots: m.imports.len() as u8,
+        };
+        for (k, i) in m.imports.iter().enumerate() {
+            a.slots[k] = self.registry.resolve(i.hash, i.name.as_bytes())?;
+        }
+        self.applets[id as usize] = Some(a);
+        Ok(())
+    }
+
+    /// Run applet `applet`'s code at offset `entry` of its image, servicing its mesh ops.
     pub fn call(&mut self, applet: u8, entry: u32, args: &[u32]) -> Result<u32, Error> {
-        self.run_guest(applet, entry, args, 0)
+        let at = self
+            .code_addr(applet, entry)
+            .ok_or(Error::BadAppletId(applet))?;
+        let top = self.ram_base + self.ram.len() as u32;
+        self.run_guest(applet, at, args, 0, top)
+    }
+
+    /// Run `f` with the interpreter's view of memory for code region `r`,
+    /// that region's decode table, and the register file for `depth`.
+    fn with_cpu<R>(
+        &mut self,
+        r: usize,
+        depth: usize,
+        f: impl FnOnce(&mut Cpu, &mut Mem, &mut [fast::E]) -> R,
+    ) -> Result<R, Error> {
+        let Kernel {
+            regions,
+            views,
+            nviews,
+            ram,
+            ram_base,
+            cpus,
+            ..
+        } = self;
+        let reg = regions
+            .get_mut(r)
+            .and_then(|r| r.as_mut())
+            .ok_or(Error::BadPointer(0))?;
+        let mut mem = Mem {
+            image: reg.bytes,
+            image_base: reg.base,
+            ram,
+            ram_base: *ram_base,
+            others: &views[..*nviews],
+        };
+        Ok(f(&mut cpus[depth], &mut mem, &mut *reg.table))
+    }
+
+    /// The code region holding address `t`.
+    fn region_at(&self, t: u32) -> Option<usize> {
+        self.regions.iter().position(|r| {
+            r.as_ref()
+                .is_some_and(|r| t.wrapping_sub(r.base) < r.bytes.len() as u32)
+        })
     }
 
     fn run_guest(
@@ -476,60 +658,70 @@ impl<'a> Kernel<'a> {
         entry: u32,
         args: &[u32],
         depth: usize,
+        sp: u32,
     ) -> Result<u32, Error> {
         if depth >= MAX_DEPTH {
             return Err(Error::DepthExceeded(depth));
         }
         self.max_depth_seen = self.max_depth_seen.max(depth);
-        let slots = self
+        let a = self
             .applets
             .get(applet as usize)
             .copied()
             .flatten()
             .ok_or(Error::BadAppletId(applet))?;
-        let top = self.ram_base.wrapping_add(self.ram.len() as u32);
-        let sp = top.wrapping_sub(depth as u32 * STACK_PER_LEVEL);
-        let mut cpu = Cpu::new();
-        {
-            let (mem, table) = self.guest();
-            cpu.start(&mem, table.len(), entry, args, sp)?;
-        }
+        let mut r = a.region as usize;
+        self.with_cpu(r, depth, |cpu, mem, table| {
+            cpu.start(mem, table.len(), entry, args, sp, a.gp)
+        })??;
         loop {
-            let stop = {
-                let (mut mem, table) = self.guest();
-                cpu.run(&mut mem, table)?
-            };
-            match stop {
+            match self.with_cpu(r, depth, |cpu, mem, table| cpu.run(mem, table))?? {
                 Stop::Returned(v) => {
                     #[cfg(feature = "count")]
                     {
-                        self.steps += cpu.steps;
+                        self.steps += core::mem::replace(&mut self.cpus[depth].steps, 0);
                     }
                     return Ok(v);
                 }
+                Stop::Jump(t) => {
+                    // Code in another region: library code runs with the caller's gp.
+                    r = self.region_at(t).ok_or(Error::BadPointer(t))?;
+                    self.with_cpu(r, depth, |cpu, mem, table| {
+                        cpu.resume_at(mem, table.len(), t)
+                    })??;
+                }
                 Stop::Ecall => {
-                    let slot = cpu.x[call::REG_SLOT];
-                    if slot >= slots.nslots as u32 {
+                    let x = &self.cpus[depth].x;
+                    let slot = x[call::REG_SLOT];
+                    if slot >= a.nslots as u32 {
                         return Err(Error::BadSlot(slot));
                     }
-                    let idx = slots.slots[slot as usize];
-                    let mut a = [0u32; 6];
-                    a.copy_from_slice(&cpu.x[call::REG_ARG0..call::REG_ARG0 + call::NUM_ARGS]);
-                    let r = self.dispatch(idx, a, depth)?;
-                    cpu.x[call::REG_RET0] = r[0];
-                    cpu.x[call::REG_RET1] = r[1];
+                    let mut args = [0u32; call::NUM_ARGS];
+                    args.copy_from_slice(&x[call::REG_ARG0..call::REG_ARG0 + call::NUM_ARGS]);
+                    // A guest provider continues on this caller's stack.
+                    let caller_sp = x[2] & !15;
+                    let res = self.dispatch(a.slots[slot as usize], args, depth, caller_sp)?;
+                    let x = &mut self.cpus[depth].x;
+                    x[call::REG_RET0] = res[0];
+                    x[call::REG_RET1] = res[1];
                 }
             }
         }
     }
 
     /// Run the provider of registry entry `idx`. Callers can't tell native from guest.
-    pub fn dispatch(&mut self, idx: u16, a: [u32; 6], depth: usize) -> Result<[u32; 2], Error> {
+    fn dispatch(
+        &mut self,
+        idx: u16,
+        a: [u32; 6],
+        depth: usize,
+        sp: u32,
+    ) -> Result<[u32; 2], Error> {
         let e = *self.registry.entry(idx).ok_or(Error::BadSlot(idx as u32))?;
         match e.provider {
             Provider::Native(f) => f(self, a),
             Provider::Guest { applet, entry } => {
-                Ok([self.run_guest(applet, entry, &a, depth + 1)?, 0])
+                Ok([self.run_guest(applet, entry, &a, depth + 1, sp)?, 0])
             }
         }
     }

@@ -28,10 +28,21 @@ pub enum Fault {
 
 /// Guest memory: a read-only image (code + rodata) and a read-write RAM window.
 pub struct Mem<'a> {
+    /// The code region the guest is running in (code + its rodata).
     pub image: &'a [u8],
     pub image_base: u32,
     pub ram: &'a mut [u8],
     pub ram_base: u32,
+    /// Other read-only regions loads may reach (e.g. another applet's flash,
+    /// through a pointer it passed). Searched only after RAM and `image`.
+    pub others: &'a [Region<'a>],
+}
+
+/// A read-only guest memory region: guest address `base`, host bytes.
+#[derive(Clone, Copy)]
+pub struct Region<'a> {
+    pub base: u32,
+    pub bytes: &'a [u8],
 }
 
 impl Mem<'_> {
@@ -56,10 +67,36 @@ impl Mem<'_> {
         self.image.get(i..i + n)
     }
 
+    /// The cold path: a load outside RAM and the current code region. Kept
+    /// out of [`Mem::bytes`] on purpose: a fallback there (even a cold call)
+    /// changed LLVM's layout of the fast interpreter's loop and cost 10%
+    /// (round 7b), whereas a miss in `load` was already an out-of-line exit.
+    #[cold]
+    #[inline(never)]
+    fn load_other(&self, a: u32, f3: u32) -> Result<u32, Fault> {
+        let n = 1usize << (f3 & 3);
+        let b = self
+            .others
+            .iter()
+            .find_map(|r| {
+                let o = a.wrapping_sub(r.base) as usize;
+                (o.wrapping_add(n) <= r.bytes.len()).then(|| &r.bytes[o..o + n])
+            })
+            .ok_or(Fault::Load(a))?;
+        Self::extend(b, a, f3)
+    }
+
     #[inline(always)]
     pub fn load(&self, a: u32, f3: u32) -> Result<u32, Fault> {
         let n = 1usize << (f3 & 3);
-        let b = self.bytes(a, n).ok_or(Fault::Load(a))?;
+        match self.bytes(a, n) {
+            Some(b) => Self::extend(b, a, f3),
+            None => self.load_other(a, f3),
+        }
+    }
+
+    #[inline(always)]
+    fn extend(b: &[u8], a: u32, f3: u32) -> Result<u32, Fault> {
         Ok(match f3 {
             0 => b[0] as i8 as i32 as u32,
             1 => u16::from_le_bytes([b[0], b[1]]) as i16 as i32 as u32,

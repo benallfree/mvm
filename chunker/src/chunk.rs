@@ -510,6 +510,11 @@ impl Store {
 
     /// The first chunk with the same hash as `i`. Call after hashing every chunk.
     pub fn canonical(&self, i: usize) -> usize {
+        // Writable statics are never merged: two zero-initialised counters
+        // have the same content but must stay two variables.
+        if matches!(self.chunks[i].kind, Kind::Data | Kind::Bss) {
+            return i;
+        }
         let h = self.hashes[i];
         self.hashes.iter().position(|x| *x == h).unwrap()
     }

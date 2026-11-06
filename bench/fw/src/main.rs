@@ -29,6 +29,7 @@ fn mem() -> Mem<'static> {
         image_base: img::BASE,
         ram: unsafe { &mut *addr_of_mut!(GRAM) },
         ram_base: GUEST_RAM,
+        others: &[],
     }
 }
 

@@ -106,6 +106,7 @@ pub fn run_all(chip: &str, cycles: impl Fn() -> u32, out: &mut impl Write) -> bo
             image_base: img::BASE,
             ram: &mut gram,
             ram_base: GUEST_RAM,
+            others: &[],
         };
         let _ = cpu.call(&mut mem, &mut table, entry, &[GUEST_RAM, c.len as u32]);
         let t0 = cycles();

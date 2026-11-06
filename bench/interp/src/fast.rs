@@ -12,6 +12,12 @@
 //! - **Operands are read inside the arms that need them**, not up front for every op.
 //! - **Specialised forms:** `li`, `mv`, branch-against-zero (`beqz`/`bnez`), and `lui`/`auipc` fold to `li`.
 //! - Writes to x0 are removed at decode time, as in `pd`.
+//! - Round 7b: code may sit in several regions (scattered flash). A jump out
+//!   of the current region stops with [`Stop::Jump`]; in-region code is
+//!   unchanged (decode still proves in-region targets). A `jal` to another
+//!   region decodes as `jalr` from x0 with the absolute target, so it needs no
+//!   extra arm (an extra arm changed LLVM's block layout and cost 10%).
+//!   `start` takes `gp` and no longer clears the register file.
 //! - Round seven: `ecall` stops the loop ([`Stop::Ecall`]) so the host can
 //!   service a mesh op and resume; `start`/`run` replace the one-shot `call`
 //!   for hosts that offer ops (`call` remains, and treats `ecall` as a fault).
@@ -153,8 +159,15 @@ fn decode(mem: &Mem, table: &mut [E], ip: usize) -> Result<(), Fault> {
         0x37 => (e.op, e.imm) = (Li, (ins & 0xffff_f000) as i32),
         0x17 => (e.op, e.imm) = (Li, pc.wrapping_add(ins & 0xffff_f000) as i32),
         0x6f => {
-            if let Some(t) = slot(pc.wrapping_add(imm_j(ins) as u32)) {
-                (e.op, e.imm) = (Jal, t);
+            let target = pc.wrapping_add(imm_j(ins) as u32);
+            match slot(target) {
+                Some(t) => (e.op, e.imm) = (Jal, t),
+                // Code in another region: `jalr rd, target(x0)`; the jalr arm
+                // finds it out of range and stops with Stop::Jump.
+                None => {
+                    (e.op, e.imm) = (Jalr, target as i32);
+                    e.rs1 = 0;
+                }
             }
         }
         0x67 => (e.op, e.imm) = (Jalr, imm_i(ins)),
@@ -272,6 +285,10 @@ pub enum Stop {
     /// registers, writes the result to `a0`/`a1`, and calls `run` again to
     /// continue after the `ecall`.
     Ecall,
+    /// Control left this code region for `target` (a jal or jalr to code
+    /// elsewhere; the link register is already written). The host finds the
+    /// region holding `target` and calls [`Cpu::resume_at`], then `run`.
+    Jump(u32),
 }
 
 pub struct Cpu {
@@ -312,16 +329,23 @@ impl Cpu {
         args: &[u32],
     ) -> Result<u32, Fault> {
         let sp = (mem.ram_base.wrapping_add(mem.ram.len() as u32)) & !15;
-        self.start(mem, table.len(), entry, args, sp)?;
+        self.start(mem, table.len(), entry, args, sp, 0)?;
         match self.run(mem, table)? {
             Stop::Returned(v) => Ok(v),
             Stop::Ecall => Err(Fault::Illegal(
                 mem.image_base.wrapping_add(2 * self.ip as u32),
             )),
+            Stop::Jump(t) => Err(Fault::Fetch(t)),
         }
     }
 
-    /// Set up a call to `entry` with up to 8 arguments and stack pointer `sp`.
+    /// Set up a call to `entry` with up to 8 arguments, stack pointer `sp`
+    /// and global pointer `gp`.
+    ///
+    /// The register file is reused, not cleared: only `ra`, `sp`, `gp` and the
+    /// argument registers are set. A callee can't rely on other registers'
+    /// values anyway, and clearing 256 bytes per call was most of the cost of
+    /// an applet-to-applet call (round seven).
     pub fn start(
         &mut self,
         mem: &Mem,
@@ -329,19 +353,27 @@ impl Cpu {
         entry: u32,
         args: &[u32],
         sp: u32,
+        gp: u32,
     ) -> Result<(), Fault> {
-        if table_len != mem.image.len() / 2 {
-            return Err(Fault::Fetch(entry));
-        }
-        let off = entry.wrapping_sub(mem.image_base);
-        if off & 1 != 0 || (off >> 1) as usize >= table_len {
-            return Err(Fault::Fetch(entry));
-        }
-        self.x = [0; 64];
+        self.resume_at(mem, table_len, entry)?;
         self.x[1] = EXIT;
         self.x[2] = sp & !15;
+        self.x[3] = gp;
         for (i, a) in args.iter().take(8).enumerate() {
             self.x[10 + i] = *a;
+        }
+        Ok(())
+    }
+
+    /// Continue at `target` in the code region `mem.image` (after
+    /// [`Stop::Jump`]): registers are untouched.
+    pub fn resume_at(&mut self, mem: &Mem, table_len: usize, target: u32) -> Result<(), Fault> {
+        if table_len != mem.image.len() / 2 {
+            return Err(Fault::Fetch(target));
+        }
+        let off = target.wrapping_sub(mem.image_base);
+        if off & 1 != 0 || (off >> 1) as usize >= table_len {
+            return Err(Fault::Fetch(target));
         }
         self.ip = (off >> 1) as usize;
         Ok(())
@@ -445,7 +477,11 @@ impl Cpu {
                     if t == EXIT {
                         return Ok(Stop::Returned(x[10]));
                     }
-                    ip = to_slot(t)?;
+                    match to_slot(t) {
+                        Ok(s) => ip = s,
+                        // Code in another region (a far jal, or a return across regions).
+                        Err(_) => return Ok(Stop::Jump(t)),
+                    }
                 }
                 Op::Beqz => ip = if x[r1] == 0 { e.imm as usize } else { next },
                 Op::Bnez => ip = if x[r1] != 0 { e.imm as usize } else { next },

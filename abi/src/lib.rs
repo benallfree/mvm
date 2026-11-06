@@ -26,10 +26,17 @@ pub mod names {
     pub const UART_WRITE: &str = "kernel.uart.write.v1";
     pub const TIMER_NOW: &str = "kernel.timer.now.v1";
     pub const NOP: &str = "kernel.nop.v1";
+    /// `(ptr) -> applet id + 1` of the applet whose static block holds `ptr`, else 0.
+    pub const MEM_OWNER: &str = "kernel.mem.owner.v1";
 }
 
 /// Only the kernel may register names starting with this.
 pub const KERNEL_NAMESPACE: &[u8] = b"kernel.";
+
+/// `gp` points this far into an applet's static block, so the signed 12-bit
+/// offsets of rewritten accesses reach the whole block (up to 4 KB). See
+/// MEMMODEL.md.
+pub const GP_BIAS: u32 = 2048;
 
 /// The mesh-op call ABI: `ecall` with the import slot in a7, arguments in
 /// a0..a5, result in a0 (and a1). Register numbers, x0 = 0.

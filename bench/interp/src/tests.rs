@@ -45,6 +45,7 @@ fn simple_matches_native() {
             image_base: img::BASE,
             ram: &mut ram,
             ram_base: RAM_BASE,
+            others: &[],
         };
         let mut cpu = simple::Cpu::new();
         let got = cpu
@@ -68,6 +69,7 @@ fn predecoded_matches_native() {
             image_base: img::BASE,
             ram: &mut ram,
             ram_base: RAM_BASE,
+            others: &[],
         };
         let mut table = vec![pd::D::EMPTY; img::IMAGE_LEN / 2];
         // Twice: cold (decodes as it goes) and warm (table filled).
@@ -99,6 +101,7 @@ fn fast_matches_native() {
             image_base: img::BASE,
             ram: &mut ram,
             ram_base: RAM_BASE,
+            others: &[],
         };
         let mut table = vec![fast::E::EMPTY; img::IMAGE_LEN / 2];
         for pass in ["cold", "warm"] {
@@ -124,6 +127,7 @@ fn fast_rejects_bad_targets() {
         image_base: img::BASE,
         ram: &mut ram,
         ram_base: RAM_BASE,
+        others: &[],
     };
     let mut table = vec![fast::E::EMPTY; img::IMAGE_LEN / 2];
     let mut cpu = fast::Cpu::new();
@@ -133,4 +137,54 @@ fn fast_rejects_bad_targets() {
     assert!(cpu
         .call(&mut mem, &mut table[..10], img::CRC16, &[])
         .is_err());
+}
+
+#[test]
+fn fast_jumps_between_code_regions() {
+    // Region A (0x1000): `jal x0, +0x1000` (to 0x2000, outside A), then a nop.
+    let a: [u8; 8] = [0x6f, 0x10, 0x00, 0x00, 0x13, 0x00, 0x00, 0x00];
+    // Region B (0x2000): `addi a0, a0, 5`; `ret`.
+    let b: [u8; 8] = [0x13, 0x05, 0x55, 0x00, 0x67, 0x80, 0x00, 0x00];
+    let (mut ta, mut tb) = ([fast::E::EMPTY; 4], [fast::E::EMPTY; 4]);
+    let mut ram = vec![0u8; 256];
+    let mut cpu = fast::Cpu::new();
+    let mut mem = Mem {
+        image: &a,
+        image_base: 0x1000,
+        ram: &mut ram,
+        ram_base: RAM_BASE,
+        others: &[],
+    };
+    cpu.start(&mem, ta.len(), 0x1000, &[37], RAM_BASE + 256, 0)
+        .unwrap();
+    assert_eq!(cpu.run(&mut mem, &mut ta), Ok(fast::Stop::Jump(0x2000)));
+    let mut mem = Mem {
+        image: &b,
+        image_base: 0x2000,
+        ram: &mut ram,
+        ram_base: RAM_BASE,
+        others: &[],
+    };
+    cpu.resume_at(&mem, tb.len(), 0x2000).unwrap();
+    assert_eq!(cpu.run(&mut mem, &mut tb), Ok(fast::Stop::Returned(42)));
+}
+
+#[test]
+fn loads_reach_other_regions() {
+    let code: [u8; 8] = [0x13, 0, 0, 0, 0x13, 0, 0, 0];
+    let other: [u8; 4] = [0x78, 0x56, 0x34, 0x12];
+    let mut ram = vec![0u8; 16];
+    let regions = [Region {
+        base: 0x9000,
+        bytes: &other,
+    }];
+    let mem = Mem {
+        image: &code,
+        image_base: 0x1000,
+        ram: &mut ram,
+        ram_base: RAM_BASE,
+        others: &regions,
+    };
+    assert_eq!(mem.load(0x9000, 2), Ok(0x1234_5678));
+    assert!(mem.load(0x9004, 2).is_err());
 }

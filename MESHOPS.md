@@ -130,7 +130,9 @@ name checks it was about 930. That's still about 60 µs at 64 MHz, once per load
   looks up the slot (an array index) and the entry, then runs the provider:
   - **Native:** a Rust function `fn(&mut Kernel, [u32; 6]) -> [u32; 2]`.
   - **Guest:** the interpreter re-enters with a fresh register file, one level
-    deeper, on its own 2 KB slice of guest stack.
+    deeper, on its own 2 KB slice of guest stack. *(Round 7b: the register file is
+    reused per level, not cleared, and the callee continues on the caller's
+    stack. See [MEMMODEL.md](MEMMODEL.md).)*
 - **The result** goes back into `a0`/`a1`, and the caller resumes after its `ecall`.
 - **Maximum depth:** `MAX_DEPTH = 8` levels, the outermost call included.
   - In the test, B calling `test.recurse.v1(6)` reaches depth 7 and works.
@@ -139,8 +141,9 @@ name checks it was about 930. That's still about 60 µs at 64 MHz, once per load
   - Aborting the whole call was chosen over returning an error code to the guest:
     runaway recursion is a bug, and v1 trusts applets, so fail loudly.
 - **Stack per level:**
-  - Host: 464 bytes on Thumb (`run_guest` 392 + `dispatch` 72).
+  - Host: 464 bytes on Thumb (`run_guest` 392 + `dispatch` 72). *(7b: 232 B.)*
   - Guest: 2 KB, from the top of the shared guest RAM (16 KB for 8 levels).
+    *(7b: one shared stack; 48 B per level in the test.)*
 
 ## Swapping a provider
 
@@ -175,6 +178,9 @@ replaces the entry in place. So when A2 registers `test.echo.v1`:
     and pointers to another applet's rodata must resolve.
 - **Chunker:** `chunker link --base` links each applet at its own address in that
   region.
+- *Round 7b removed both: applets are position independent (`chunker link-pic`,
+  globals through `gp`) and may sit in separate code regions. See
+  [MEMMODEL.md](MEMMODEL.md).*
 - **Manifest format:** imports and exports have to become first-class manifest
   fields: hash *and full name* for each, with export → entry address. A loader can then resolve before
   fetching code, and a store can check that a set of applets is complete without

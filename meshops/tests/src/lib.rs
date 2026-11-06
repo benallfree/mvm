@@ -1,7 +1,7 @@
 #![no_std]
 //! Round-seven mesh-op tests, shared by every target. A target supplies an
 //! output sink, a monotonic tick source (for kernel.timer.now.v1) and a cycle
-//! counter; this loads the applets and runs tests 1-8 plus the cost sections.
+//! counter; this loads the applets and runs tests 1-13 plus the cost sections.
 //!
 //! Lines: `MO <chip> <test> pass=<0|1> <details>` and
 //! `MO <chip> cost <section> n=<N> cycles=<C> [steps=<S>]`, then `MO <chip> done pass=<0|1>`.
@@ -11,7 +11,7 @@
 use core::fmt::Write;
 use core::ptr::addr_of_mut;
 use interp::fast;
-use mvm_kernel::{fnv1a64, Console, Error, Kernel, MAX_DEPTH};
+use mvm_kernel::{fnv1a64, fnv1a64_bytes, Console, Error, Kernel, Manifest, MAX_DEPTH};
 
 #[allow(dead_code)]
 mod img {
@@ -126,10 +126,13 @@ impl<W: Write> Console for Tee<'_, W> {
     }
 }
 
-const RAM_BASE: u32 = 0x8000_0000;
-const RAM_SIZE: usize = 24 * 1024;
+/// The kernel's RAM arena: applet static blocks at the bottom, the one shared stack on top.
+const RAM_SIZE: usize = 16 * 1024;
+const STACK_SIZE: u32 = 8 * 1024;
 static mut RAM: [u8; RAM_SIZE] = [0; RAM_SIZE];
-static mut TABLE: [fast::E; img::BLOB_LEN / 2] = [fast::E::EMPTY; img::BLOB_LEN / 2];
+/// Decode tables for every loaded flash image (one entry per 2 bytes of image).
+const TABLES: usize = 4096;
+static mut TABLE: [fast::E; TABLES] = [fast::E::EMPTY; TABLES];
 
 const H: u8 = 0;
 const A: u8 = 1;
@@ -137,6 +140,11 @@ const B: u8 = 2;
 const A2: u8 = 3;
 const B_AGAIN: u8 = 4;
 const M: u8 = 5;
+/// Applet C: two instances of one flash image, and one from a second flash copy.
+const C_A: u8 = 6;
+const C_B: u8 = 7;
+const C_COPY: u8 = 8;
+const FIT: u8 = 9;
 
 /// A2's test.echo.v1 tags its answer so callers can tell which provider ran.
 const A2_TAG: u32 = 0xA2A2_0000;
@@ -157,15 +165,7 @@ pub fn run_all<W: Write>(
     cap_take();
     mute(false);
     let (ram, table) = unsafe { (&mut *addr_of_mut!(RAM), &mut *addr_of_mut!(TABLE)) };
-    let k = match Kernel::new(
-        &img::BLOB.0,
-        img::BLOB_BASE,
-        ram,
-        RAM_BASE,
-        table,
-        &mut tee,
-        now,
-    ) {
+    let k = match Kernel::new(ram, STACK_SIZE, table, &mut tee, now) {
         Ok(k) => k,
         Err(e) => {
             let _ = writeln!(tee.out, "MO {chip} init pass=0 {e:?}");
@@ -190,6 +190,11 @@ pub fn run_all<W: Write>(
     r.missing_import();
     r.swap();
     r.spoof();
+    r.position_independence();
+    r.instances();
+    r.real_pointers();
+    r.shared_stack();
+    r.fit();
 
     // The kernel held `out` (through the console) until now.
     let Run { report, all, .. } = r;
@@ -252,9 +257,9 @@ impl<'a> Run<'_, 'a> {
     fn load(&mut self) {
         let loads = self.timed("load_all", 3, |k| {
             [
-                k.load(H, img::h::IMPORTS, img::h::EXPORTS),
-                k.load(A, img::a::IMPORTS, img::a::EXPORTS),
-                k.load(B, img::b::IMPORTS, img::b::EXPORTS),
+                k.load(H, &img::h::MANIFEST),
+                k.load(A, &img::a::MANIFEST),
+                k.load(B, &img::b::MANIFEST),
             ]
         });
         let ok = loads.iter().all(|l| l.is_ok());
@@ -263,10 +268,11 @@ impl<'a> Run<'_, 'a> {
             "load",
             ok,
             format_args!(
-                "applets=3 registry_entries={entries} entry_bytes={} applet_bytes={} registry_bytes={}",
+                "applets=3 registry_entries={entries} entry_bytes={} applet_bytes={} registry_bytes={} real_addresses={}",
                 core::mem::size_of::<mvm_kernel::Entry>(),
                 core::mem::size_of::<mvm_kernel::Applet>(),
-                core::mem::size_of::<mvm_kernel::Registry>()
+                core::mem::size_of::<mvm_kernel::Registry>(),
+                self.k.real_addresses() as u8
             ),
         );
     }
@@ -358,7 +364,7 @@ impl<'a> Run<'_, 'a> {
     /// 6. A missing import fails the load, names the import, and changes nothing.
     fn missing_import(&mut self) {
         let before = self.k.registry.len();
-        let r = self.k.load(M, img::m::IMPORTS, img::m::EXPORTS);
+        let r = self.k.load(M, &img::m::MANIFEST);
         let ok = matches!(r, Err(Error::Unresolved(h)) if h == fnv1a64("test.nobody.v1"))
             && self.k.registry.len() == before
             && self.k.applets[M as usize].is_none();
@@ -377,9 +383,9 @@ impl<'a> Run<'_, 'a> {
     fn swap(&mut self) {
         let cs = self.cs;
         let before = self.k.call(B, img::b::ECHO_ONCE, &[]);
-        let l = self.k.load(A2, img::a2::IMPORTS, img::a2::EXPORTS);
+        let l = self.k.load(A2, &img::a2::MANIFEST);
         let old_binding = self.k.call(B, img::b::ECHO_ONCE, &[]);
-        let l2 = self.k.load(B_AGAIN, img::b::IMPORTS, img::b::EXPORTS);
+        let l2 = self.k.load(B_AGAIN, &img::b::MANIFEST);
         let new_binding = self.k.call(B_AGAIN, img::b::ECHO_ONCE, &[]);
         let tagged = cs ^ A2_TAG;
         let ok = before == Ok(cs)
@@ -399,9 +405,9 @@ impl<'a> Run<'_, 'a> {
     /// 8. Spoofing: a kernel name, and a forged hash/name pair on each side.
     fn spoof(&mut self) {
         let before = self.k.registry.len();
-        let s1 = self.k.load(M, img::s1::IMPORTS, img::s1::EXPORTS);
-        let s2 = self.k.load(M, img::s2::IMPORTS, img::s2::EXPORTS);
-        let s3 = self.k.load(M, img::s3::IMPORTS, img::s3::EXPORTS);
+        let s1 = self.k.load(M, &img::s1::MANIFEST);
+        let s2 = self.k.load(M, &img::s2::MANIFEST);
+        let s3 = self.k.load(M, &img::s3::MANIFEST);
         let echo = fnv1a64("test.echo.v1");
         let still = self.k.call(B, img::b::ECHO_ONCE, &[]);
         let ok = matches!(s1, Err(Error::ReservedNamespace(h)) if h == fnv1a64("kernel.nop.v1"))
@@ -421,6 +427,144 @@ impl<'a> Run<'_, 'a> {
             ),
         );
     }
+
+    /// The u32 at guest address `p`, read by the kernel.
+    fn peek(&self, p: u32) -> Option<u32> {
+        let b = self.k.guest_bytes(p, 4)?;
+        Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    /// 9. One image, linked once, at two flash addresses and two RAM blocks.
+    fn position_independence(&mut self) {
+        let copy = Manifest {
+            image: &img::c::IMAGE_COPY.0,
+            ..img::c::MANIFEST
+        };
+        let la = self.k.load(C_A, &img::c::MANIFEST);
+        let lc = self.k.load(C_COPY, &copy);
+        let same_bytes = img::c::IMAGE.0 == img::c::IMAGE_COPY.0;
+        let (fa, fc) = (self.k.code_addr(C_A, 0), self.k.code_addr(C_COPY, 0));
+        let (ba, bc) = (self.block(C_A), self.block(C_COPY));
+        let msg: &[u8] = b"C says hi from its .data\n";
+        let mut ok = la.is_ok() && lc.is_ok() && same_bytes && fa != fc && ba != bc;
+        for id in [C_A, C_COPY] {
+            ok &= self.k.call(id, img::c::TABLE_SUM, &[]) == Ok(10);
+            ok &= self.k.call(id, img::c::INC, &[]) == Ok(1);
+            ok &= self.k.call(id, img::c::PRINT, &[]) == Ok(msg.len() as u32)
+                && cap_take().as_str().as_bytes() == msg;
+        }
+        self.check(
+            "9-position-independence",
+            ok,
+            format_args!(
+                "flash={:#x},{:#x} ram={:#x},{:#x} image_fnv={:#018x} identical={} gp_accesses={} abs_ptrs={}",
+                fa.unwrap_or(0),
+                fc.unwrap_or(0),
+                ba,
+                bc,
+                fnv1a64_bytes(&img::c::IMAGE.0),
+                same_bytes as u8,
+                img::c::GP_REWRITES,
+                img::c::ABS_FLASH_POINTERS
+            ),
+        );
+    }
+
+    fn block(&self, id: u8) -> u32 {
+        self.k.applets[id as usize].map(|a| a.block).unwrap_or(0)
+    }
+
+    /// 10. Two instances of C: same flash code, separate statics through their own gp.
+    fn instances(&mut self) {
+        let lb = self.k.load(C_B, &img::c::MANIFEST);
+        let shared_code = self.k.code_addr(C_A, 0) == self.k.code_addr(C_B, 0);
+        let separate = self.block(C_A) != self.block(C_B);
+        // C_A is at 1 after test 9.
+        let a2 = self.k.call(C_A, img::c::INC, &[]);
+        let a3 = self.k.call(C_A, img::c::INC, &[]);
+        let b1 = self.k.call(C_B, img::c::INC, &[]);
+        let ok = lb.is_ok() && shared_code && separate && a2 == Ok(2) && a3 == Ok(3) && b1 == Ok(1);
+        self.check(
+            "10-instances",
+            ok,
+            format_args!(
+                "same_flash={} blocks={:#x},{:#x} counts={a3:?},{b1:?}",
+                shared_code as u8,
+                self.block(C_A),
+                self.block(C_B)
+            ),
+        );
+    }
+
+    /// 11. A guest pointer to a static is the real address in its block.
+    fn real_pointers(&mut self) {
+        let p = self.k.call(C_A, img::c::ADDR, &[]);
+        let owner = self.k.call(C_A, img::c::OWNER, &[]);
+        let want = self.block(C_A) + img::c::STATIC_COUNT;
+        let value = p.ok().and_then(|p| self.peek(p));
+        // On a 32-bit chip the guest address *is* the host address: read through it directly.
+        let direct = match p {
+            Ok(p) if self.k.real_addresses() => unsafe {
+                Some(core::ptr::read_volatile(p as usize as *const u32))
+            },
+            _ => None,
+        };
+        let ok = p == Ok(want)
+            && owner == Ok(C_A as u32 + 1)
+            && value == Some(3)
+            && (!self.k.real_addresses() || direct == Some(3));
+        self.check(
+            "11-real-pointers",
+            ok,
+            format_args!(
+                "ptr={p:?} block+off={want:#x} owner={owner:?} real={} direct_read={direct:?}",
+                self.k.real_addresses() as u8
+            ),
+        );
+    }
+
+    /// Bytes of the shared stack used by `f` (paint, run, find the deepest write).
+    fn stack_peak(&mut self, f: impl FnOnce(&mut Kernel<'a>)) -> usize {
+        self.k.stack().fill(0xA5);
+        f(&mut self.k);
+        let s = self.k.stack();
+        s.len() - s.iter().position(|&b| b != 0xA5).unwrap_or(s.len())
+    }
+
+    /// 12. Nested calls share the one stack: peak use per nesting level.
+    fn shared_stack(&mut self) {
+        let mut r = [Ok(0); 2];
+        let p1 = self.stack_peak(|k| r[0] = k.call(B, img::b::RECURSE, &[1]));
+        let p6 = self.stack_peak(|k| r[1] = k.call(B, img::b::RECURSE, &[6]));
+        let per_level = (p6.saturating_sub(p1)) / 5;
+        let ok = r == [Ok(1), Ok(6)] && p6 > p1 && p6 < STACK_SIZE as usize;
+        self.check(
+            "12-shared-stack",
+            ok,
+            format_args!(
+                "peak_depth2={p1} peak_depth7={p6} per_level={per_level} stack={STACK_SIZE}"
+            ),
+        );
+    }
+
+    /// 13. An applet whose statics don't fit is rejected before anything changes.
+    fn fit(&mut self) {
+        let free = self.k.free_ram();
+        let entries = self.k.registry.len();
+        let big = Manifest {
+            static_size: free + 1,
+            ..img::c::MANIFEST
+        };
+        let r = self.k.load(FIT, &big);
+        let ok =
+            r == Err(Error::NoRoom {
+                need: free + 1,
+                free,
+            }) && self.k.free_ram() == free
+                && self.k.registry.len() == entries
+                && self.k.applets[FIT as usize].is_none();
+        self.check("13-fit", ok, format_args!("free={free} result={r:?}"));
+    }
 }
 
 fn fmt_delta(d: u32) -> Line {
@@ -431,14 +575,14 @@ fn fmt_delta(d: u32) -> Line {
 
 /// A fixed-capacity text line.
 pub struct Line {
-    buf: [u8; 192],
+    buf: [u8; 256],
     len: usize,
 }
 
 impl Default for Line {
     fn default() -> Self {
         Line {
-            buf: [0; 192],
+            buf: [0; 256],
             len: 0,
         }
     }
@@ -461,7 +605,7 @@ impl Write for Line {
 
 /// Report lines, kept until the kernel releases the output sink.
 pub struct Lines {
-    l: [Line; 24],
+    l: [Line; 40],
     n: usize,
 }
 

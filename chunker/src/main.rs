@@ -13,7 +13,8 @@ const USAGE: &str = "usage:
   chunker roundtrip <objects/rlibs...>   link spike_entry/spike_entry2, run them in the emulator, compare to native
   chunker names     <objects/rlibs...>   stable-name counts per crate; 8-byte name / 16-byte chunk hash collisions
   chunker manifest  --entry E [--entry E2] [--label L] <objects/rlibs...>   manifest size in three encodings
-  chunker link      --entry E [--entry E2] [--base HEX] -o OUT <objects/rlibs...>   flat image (default base 0x1000): OUT.bin + OUT.rs
+  chunker link      --entry E [--entry E2] -o OUT <objects/rlibs...>   flat image at 0x1000 (bench only): OUT.bin + OUT.rs
+  chunker link-pic  --entry E [--entry E2] -o OUT <objects/rlibs...>   position-independent: OUT.bin (flash), OUT.static (RAM init), OUT.json
   chunker compare   --entry E <build A inputs...> -- <build B inputs...>    size and shared hashes, A vs B";
 
 fn load(paths: &[String]) -> Result<Store, String> {
@@ -251,7 +252,8 @@ fn applet_roundtrip(store: &Store) -> Result<(), String> {
 
 /// Link the entries into one flat image at `base`. Writes `<out>.bin` and
 /// `<out>.rs` (base, entry addresses, and an include of the image).
-fn link_out(store: &Store, entries: &[String], out: &str, base: u32) -> Result<(), String> {
+fn link_out(store: &Store, entries: &[String], out: &str) -> Result<(), String> {
+    let base = 0x1000u32;
     let roots: Vec<usize> = entries
         .iter()
         .map(|e| store.by_name.get(e).copied().ok_or(format!("no entry {e}")))
@@ -286,6 +288,50 @@ fn link_out(store: &Store, entries: &[String], out: &str, base: u32) -> Result<(
     Ok(())
 }
 
+/// Round 7b: link without a base address. See `link::link_pic`.
+fn link_pic_out(store: &Store, entries: &[String], out: &str) -> Result<(), String> {
+    let roots: Vec<usize> = entries
+        .iter()
+        .map(|e| store.by_name.get(e).copied().ok_or(format!("no entry {e}")))
+        .collect::<Result<_, _>>()?;
+    let img = link::link_pic(store, &roots)?;
+    let w = |p: String, b: &[u8]| std::fs::write(&p, b).map_err(|e| format!("{p}: {e}"));
+    w(format!("{out}.bin"), &img.flash)?;
+    w(format!("{out}.static"), &img.static_init)?;
+    let mut j = String::from("{\n  \"entries\": {");
+    for (k, (e, &r)) in entries.iter().zip(&roots).enumerate() {
+        let r = store.canonical(r);
+        let (area, off) = match (img.flash_off.get(&r), img.static_off.get(&r)) {
+            (Some(o), _) => ("flash", *o),
+            (_, Some(o)) => ("static", *o),
+            _ => return Err(format!("{e} was not placed")),
+        };
+        j += &format!("{}\n    \"{e}\": [\"{area}\", {off}]", if k > 0 { "," } else { "" });
+    }
+    j += &format!(
+        "\n  }},\n  \"flash_len\": {},\n  \"static_size\": {},\n  \"static_align\": {},\n  \"gp_rewrites\": {},",
+        img.flash.len(),
+        img.static_size,
+        img.static_align,
+        img.gp_rewrites
+    );
+    let relocs: Vec<String> = img.data_relocs.iter().map(|(a, s, o)| format!("[{a}, {s}, {o}]")).collect();
+    j += &format!("\n  \"data_relocs\": [{}],", relocs.join(", "));
+    let abs: Vec<String> = img.abs_flash.iter().map(|(c, o)| format!("[\"{c}\", {o}]")).collect();
+    j += &format!("\n  \"abs_flash\": [{}]\n}}\n", abs.join(", "));
+    w(format!("{out}.json"), j.as_bytes())?;
+    println!(
+        "flash {} bytes, statics {} bytes (align {}), {} gp-relative accesses, {} data relocs, {} absolute pointers in flash",
+        img.flash.len(),
+        img.static_size,
+        img.static_align,
+        img.gp_rewrites,
+        img.data_relocs.len(),
+        img.abs_flash.len()
+    );
+    Ok(())
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (cmd, rest) = match args.split_first() {
@@ -297,17 +343,13 @@ fn main() {
     };
     let (mut entries, mut label, mut inputs) = (Vec::new(), String::from("build"), Vec::new());
     let mut out = String::from("image");
-    let mut base = 0x1000u32;
     let mut it = rest.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--entry" => entries.push(it.next().expect("--entry needs a value").clone()),
             "--label" => label = it.next().expect("--label needs a value").clone(),
             "-o" => out = it.next().expect("-o needs a value").clone(),
-            "--base" => {
-                let v = it.next().expect("--base needs a value");
-                base = u32::from_str_radix(v.trim_start_matches("0x"), 16).expect("--base is hex")
-            }
+
             _ => inputs.push(a.clone()),
         }
     }
@@ -327,7 +369,8 @@ fn main() {
     }
     let res = load(&inputs).and_then(|mut store| match cmd {
         "names" => report::names(&mut store),
-        "link" => link_out(&store, &entries, &out, base),
+        "link" => link_out(&store, &entries, &out),
+        "link-pic" => link_pic_out(&store, &entries, &out),
         "applet-roundtrip" => applet_roundtrip(&store),
         "manifest" => report::manifest(&mut store, &label, &entries),
         "dump" => {

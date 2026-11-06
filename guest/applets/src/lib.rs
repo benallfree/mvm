@@ -136,7 +136,7 @@ pub fn op(slot: u32, a0: u32, a1: u32, a2: u32) -> u32 {
 }
 
 pub mod names {
-    pub use mvm_abi::names::{NOP, TIMER_NOW, UART_WRITE};
+    pub use mvm_abi::names::{MEM_OWNER, NOP, TIMER_NOW, UART_WRITE};
     pub const ECHO: &str = "test.echo.v1";
     pub const ECHO_LOUD: &str = "test.echo_loud.v1";
     pub const RECURSE: &str = "test.recurse.v1";
@@ -274,13 +274,16 @@ pub extern "C" fn a_echo_loud(ptr: u32, len: u32, _: u32, _: u32, _: u32, _: u32
 }
 
 /// test.recurse.v1(n): calls itself through the kernel n times; returns n.
+/// Each level keeps a small frame on the stack, so nested calls show up on
+/// the one shared stack (round 7b).
 #[no_mangle]
 pub extern "C" fn a_recurse(n: u32, _: u32, _: u32, _: u32, _: u32, _: u32) -> u32 {
     if n == 0 {
-        0
-    } else {
-        1 + op(a::RECURSE, n - 1, 0, 0)
+        return 0;
     }
+    let mut frame = [n as u8; 32];
+    core::hint::black_box(&mut frame);
+    1 + op(a::RECURSE, n - 1, 0, 0) + (core::hint::black_box(frame[31]) as u32 - n as u8 as u32)
 }
 
 // ---- A2: a second provider of test.echo.v1 (for the swap test) ----
@@ -399,6 +402,57 @@ pub static S3_IMPORTS: Imports<1> = Imports::new([Import {
     name: "evil.echo.v1".as_ptr(),
     len: 12,
 }]);
+
+// ---- C: state in statics (round 7b). Loaded several times: each instance
+// gets its own static block and gp, all running the same flash code. ----
+
+/// `.bss`: a counter, zero at load.
+#[no_mangle]
+pub static mut C_COUNT: u32 = 0;
+/// `.data`: initial values the kernel copies into the block at load.
+#[no_mangle]
+pub static mut C_TABLE: [u32; 4] = [1, 2, 3, 4];
+/// `.data` holding a pointer to flash: relocated by the kernel at load.
+#[no_mangle]
+pub static mut C_MSG: &[u8] = b"C says hi from its .data\n";
+
+#[no_mangle]
+pub static C_IMPORTS: Imports<2> = Imports::new([import(names::UART_WRITE), import(names::MEM_OWNER)]);
+
+/// Count up; returns the new value.
+#[no_mangle]
+pub extern "C" fn c_inc() -> u32 {
+    unsafe {
+        let p = core::ptr::addr_of_mut!(C_COUNT);
+        *p += 1;
+        *p
+    }
+}
+
+/// The address of `C_COUNT`, as the guest sees it.
+#[no_mangle]
+pub extern "C" fn c_addr() -> u32 {
+    core::ptr::addr_of!(C_COUNT) as u32
+}
+
+/// Ask the kernel which applet owns `C_COUNT`'s address.
+#[no_mangle]
+pub extern "C" fn c_owner() -> u32 {
+    op(1, core::ptr::addr_of!(C_COUNT) as u32, 0, 0)
+}
+
+/// Sum of `C_TABLE` (checks `.data` initialisation): 10 at load.
+#[no_mangle]
+pub extern "C" fn c_table_sum() -> u32 {
+    unsafe { (*core::ptr::addr_of!(C_TABLE)).iter().sum() }
+}
+
+/// Print `C_MSG` (checks the `.data` pointer relocation).
+#[no_mangle]
+pub extern "C" fn c_print() -> u32 {
+    let m: &[u8] = unsafe { *core::ptr::addr_of!(C_MSG) };
+    print(0, m)
+}
 
 #[cfg(target_arch = "riscv32")]
 #[panic_handler]
