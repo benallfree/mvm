@@ -31,11 +31,13 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
 
 # Rust: stable 1.97.0 for host tools and Thumb firmware; the pinned nightly for
 # the RV32IMC guest (with rust-src for -Zbuild-std). Same pins as the
-# rust-toolchain.toml files in the repo.
+# rust-toolchain.toml files in the repo. The chmod lives in this layer: done
+# later, it would copy all of /opt/rustup into a new layer.
 RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.97.0 \
  && rustup component add rustfmt clippy \
  && rustup target add thumbv7em-none-eabihf \
- && rustup toolchain install nightly-2026-11-04 --profile minimal --component rust-src --target riscv32imc-unknown-none-elf
+ && rustup toolchain install nightly-2026-11-04 --profile minimal --component rust-src --target riscv32imc-unknown-none-elf \
+ && chmod -R a+rwX /opt/cargo /opt/rustup
 
 # Python for the Unicorn harness (bench/harness).
 RUN python3 -m venv /opt/venv \
@@ -44,8 +46,7 @@ RUN python3 -m venv /opt/venv \
 # Emulators and the Xtensa toolchain, same pinned versions as outside Docker.
 COPY emu/setup-tools.sh /opt/setup-tools.sh
 RUN /opt/setup-tools.sh \
- && rm -rf /opt/emu-tools/*.tar.* /opt/emu-tools/xt197 /opt/cargo/registry /opt/cargo/git \
- && chmod -R a+rwX /opt/cargo /opt/rustup
+ && rm -rf /opt/emu-tools/*.tar.* /opt/emu-tools/xt197 /opt/cargo/registry /opt/cargo/git
 
 WORKDIR /work
 CMD ["docker/run-all.sh"]

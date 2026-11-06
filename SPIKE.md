@@ -24,7 +24,7 @@ nRF52840 (Renode, Embassy) and an emulated ESP32-S3 (Espressif QEMU, esp-hal).
 ## Running it: Docker (stable environment, in or out of the cloud)
 
 ```sh
-docker/build.sh        # builds the `mvm-env` image (toolchains + emulators, ~3.6 GB)
+docker/build.sh        # builds the `mvm-env` image (toolchains + emulators, about 8 GB)
 docker/run.sh          # runs docker/run-all.sh: check.sh, bench/run.sh, emu/run.sh
 docker/run.sh emu/run.sh   # or any one command, with the repo mounted at /work
 ```
