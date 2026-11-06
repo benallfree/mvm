@@ -21,33 +21,68 @@ pub const fn fnv1a64(s: &str) -> u64 {
     h
 }
 
-/// Import table: `count`, then the name hashes. Slot `i` is `hashes[i]`.
+/// One import: 16 bytes (name hash, then the full name's address and length,
+/// so the kernel can check the hash and the name it resolves to).
+#[repr(C)]
+pub struct Import {
+    pub hash: u64,
+    pub name: *const u8,
+    pub len: u32,
+}
+
+/// Import table: `count`, then the imports. Slot `i` is `entries[i]`.
 #[repr(C)]
 pub struct Imports<const N: usize> {
     pub count: u32,
     pub _reserved: u32,
-    pub hashes: [u64; N],
+    pub entries: [Import; N],
 }
 
+// The tables are read-only data; the raw name pointers point at string literals.
+unsafe impl<const N: usize> Sync for Imports<N> {}
+unsafe impl<const N: usize> Sync for Exports<N> {}
+
 impl<const N: usize> Imports<N> {
-    pub const fn new(hashes: [u64; N]) -> Self {
+    pub const fn new(entries: [Import; N]) -> Self {
         Imports {
             count: N as u32,
             _reserved: 0,
-            hashes,
+            entries,
         }
+    }
+}
+
+/// An import of `name` (hash computed at compile time).
+pub const fn import(name: &'static str) -> Import {
+    Import {
+        hash: fnv1a64(name),
+        name: name.as_ptr(),
+        len: name.len() as u32,
     }
 }
 
 /// An op provided by an applet: called with a0..a5, returns a0.
 pub type OpFn = extern "C" fn(u32, u32, u32, u32, u32, u32) -> u32;
 
-/// One export: 16 bytes (hash, function address, reserved).
+/// One export: 24 bytes (hash, function address, name address, name length, reserved).
 #[repr(C)]
 pub struct Export {
     pub hash: u64,
     pub func: OpFn,
+    pub name: *const u8,
+    pub len: u32,
     pub _reserved: u32,
+}
+
+/// An export of `func` under `name`.
+pub const fn export(name: &'static str, func: OpFn) -> Export {
+    Export {
+        hash: fnv1a64(name),
+        func,
+        name: name.as_ptr(),
+        len: name.len() as u32,
+        _reserved: 0,
+    }
 }
 
 #[repr(C)]
@@ -55,6 +90,16 @@ pub struct Exports<const N: usize> {
     pub count: u32,
     pub _reserved: u32,
     pub entries: [Export; N],
+}
+
+impl<const N: usize> Exports<N> {
+    pub const fn new(entries: [Export; N]) -> Self {
+        Exports {
+            count: N as u32,
+            _reserved: 0,
+            entries,
+        }
+    }
 }
 
 /// Call the op in import slot `slot` (the ABI: `ecall`, slot in a7,
@@ -81,14 +126,13 @@ pub fn op(slot: u32, a0: u32, a1: u32, a2: u32) -> u32 {
 }
 
 pub mod names {
-    use super::fnv1a64;
-    pub const UART_WRITE: u64 = fnv1a64("kernel.uart.write.v1");
-    pub const TIMER_NOW: u64 = fnv1a64("kernel.timer.now.v1");
-    pub const NOP: u64 = fnv1a64("kernel.nop.v1");
-    pub const ECHO: u64 = fnv1a64("test.echo.v1");
-    pub const ECHO_LOUD: u64 = fnv1a64("test.echo_loud.v1");
-    pub const RECURSE: u64 = fnv1a64("test.recurse.v1");
-    pub const NOBODY: u64 = fnv1a64("test.nobody.v1");
+    pub const UART_WRITE: &str = "kernel.uart.write.v1";
+    pub const TIMER_NOW: &str = "kernel.timer.now.v1";
+    pub const NOP: &str = "kernel.nop.v1";
+    pub const ECHO: &str = "test.echo.v1";
+    pub const ECHO_LOUD: &str = "test.echo_loud.v1";
+    pub const RECURSE: &str = "test.recurse.v1";
+    pub const NOBODY: &str = "test.nobody.v1";
 }
 
 fn print(slot: u32, s: &[u8]) -> u32 {
@@ -127,7 +171,11 @@ mod h {
 }
 
 #[no_mangle]
-pub static H_IMPORTS: Imports<3> = Imports::new([names::UART_WRITE, names::TIMER_NOW, names::NOP]);
+pub static H_IMPORTS: Imports<3> = Imports::new([
+    import(names::UART_WRITE),
+    import(names::TIMER_NOW),
+    import(names::NOP),
+]);
 
 /// Test 1: print a greeting; returns the op's result (bytes written).
 #[no_mangle]
@@ -190,30 +238,15 @@ mod a {
 }
 
 #[no_mangle]
-pub static A_IMPORTS: Imports<2> = Imports::new([names::UART_WRITE, names::RECURSE]);
+pub static A_IMPORTS: Imports<2> =
+    Imports::new([import(names::UART_WRITE), import(names::RECURSE)]);
 
 #[no_mangle]
-pub static A_EXPORTS: Exports<3> = Exports {
-    count: 3,
-    _reserved: 0,
-    entries: [
-        Export {
-            hash: names::ECHO,
-            func: a_echo,
-            _reserved: 0,
-        },
-        Export {
-            hash: names::ECHO_LOUD,
-            func: a_echo_loud,
-            _reserved: 0,
-        },
-        Export {
-            hash: names::RECURSE,
-            func: a_recurse,
-            _reserved: 0,
-        },
-    ],
-};
+pub static A_EXPORTS: Exports<3> = Exports::new([
+    export(names::ECHO, a_echo),
+    export(names::ECHO_LOUD, a_echo_loud),
+    export(names::RECURSE, a_recurse),
+]);
 
 /// test.echo.v1(ptr, len) -> checksum of the caller's buffer.
 #[no_mangle]
@@ -247,15 +280,7 @@ pub extern "C" fn a_recurse(n: u32, _: u32, _: u32, _: u32, _: u32, _: u32) -> u
 pub static A2_IMPORTS: Imports<0> = Imports::new([]);
 
 #[no_mangle]
-pub static A2_EXPORTS: Exports<1> = Exports {
-    count: 1,
-    _reserved: 0,
-    entries: [Export {
-        hash: names::ECHO,
-        func: a2_echo,
-        _reserved: 0,
-    }],
-};
+pub static A2_EXPORTS: Exports<1> = Exports::new([export(names::ECHO, a2_echo)]);
 
 /// Same checksum, tagged so callers can tell which provider answered.
 #[no_mangle]
@@ -272,7 +297,11 @@ mod b {
 }
 
 #[no_mangle]
-pub static B_IMPORTS: Imports<3> = Imports::new([names::ECHO, names::ECHO_LOUD, names::RECURSE]);
+pub static B_IMPORTS: Imports<3> = Imports::new([
+    import(names::ECHO),
+    import(names::ECHO_LOUD),
+    import(names::RECURSE),
+]);
 
 fn b_buf() -> [u8; 64] {
     let mut buf = [0u8; 64];
@@ -326,12 +355,42 @@ pub extern "C" fn b_recurse(n: u32) -> u32 {
 
 // ---- M: imports a name nobody provides ----
 #[no_mangle]
-pub static M_IMPORTS: Imports<2> = Imports::new([names::UART_WRITE, names::NOBODY]);
+pub static M_IMPORTS: Imports<2> = Imports::new([import(names::UART_WRITE), import(names::NOBODY)]);
 
 #[no_mangle]
 pub extern "C" fn m_main() -> u32 {
     op(1, 0, 0, 0)
 }
+
+// ---- S1-S3: spoofing attempts the kernel must reject at load ----
+
+/// S1 tries to provide a kernel op. Only the kernel may register `kernel.*`.
+#[no_mangle]
+pub static S1_IMPORTS: Imports<0> = Imports::new([]);
+#[no_mangle]
+pub static S1_EXPORTS: Exports<1> = Exports::new([export(names::NOP, a2_echo)]);
+
+/// S2 claims test.echo.v1's hash under another name: a forged collision.
+/// (A crafted real FNV collision is caught too: the registry keeps the full
+/// name and rejects a second name for the same hash.)
+#[no_mangle]
+pub static S2_IMPORTS: Imports<0> = Imports::new([]);
+#[no_mangle]
+pub static S2_EXPORTS: Exports<1> = Exports::new([Export {
+    hash: fnv1a64(names::ECHO),
+    func: a2_echo,
+    name: "evil.echo.v1".as_ptr(),
+    len: 12,
+    _reserved: 0,
+}]);
+
+/// S3 imports with the same forged pair.
+#[no_mangle]
+pub static S3_IMPORTS: Imports<1> = Imports::new([Import {
+    hash: fnv1a64(names::ECHO),
+    name: "evil.echo.v1".as_ptr(),
+    len: 12,
+}]);
 
 #[cfg(target_arch = "riscv32")]
 #[panic_handler]

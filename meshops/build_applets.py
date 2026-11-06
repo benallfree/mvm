@@ -22,6 +22,9 @@ APPLETS = [
     ("a2", ["A2_IMPORTS", "A2_EXPORTS"], "A2_EXPORTS"),
     ("b", ["B_IMPORTS", "b_echo_once", "b_echo_loop", "b_local_loop", "b_loud", "b_recurse"], None),
     ("m", ["M_IMPORTS", "m_main"], None),
+    ("s1", ["S1_IMPORTS", "S1_EXPORTS"], "S1_EXPORTS"),
+    ("s2", ["S2_IMPORTS", "S2_EXPORTS"], "S2_EXPORTS"),
+    ("s3", ["S3_IMPORTS"], None),
 ]
 
 

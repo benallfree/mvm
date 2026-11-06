@@ -7,7 +7,7 @@ import json, os, re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 EMU = os.path.join(HERE, "..", "emu", "out")
-TESTS = ["load", "1-hello", "2-timer", "3-nop-cost", "4-applet-op", "5-nested", "6-missing-import", "7-swap"]
+TESTS = ["load", "1-hello", "2-timer", "3-nop-cost", "4-applet-op", "5-nested", "6-missing-import", "7-swap", "8-spoof"]
 HOST_STACK_PER_LEVEL = 464  # Thumb: run_guest 392 B + dispatch 72 B (prologues), see MESHOPS.md
 
 
@@ -90,7 +90,7 @@ def main():
 
     L += ["## Memory and load time", ""]
     u = targets[1][4]
-    L += [f"- Registry entry: **{u.get('entry_bytes')} B** on Thumb (8 B hash, the provider, 4 B reserved hook range, enum/Option padding); "
+    L += [f"- Registry entry: **{u.get('entry_bytes')} B** on Thumb (8 B hash, 8 B name slice into the applet image, the provider, 4 B reserved hook range, enum/Option padding); "
           f"{targets[0][4].get('entry_bytes')} B on x86-64.",
           f"- Whole registry (32 entries + 64-bucket index): **{u.get('registry_bytes')} B** on Thumb.",
           f"- Per-applet slot table: **{u.get('applet_bytes')} B** (16 slots × 2 B entry index + count).",

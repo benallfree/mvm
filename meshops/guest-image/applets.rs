@@ -2,44 +2,62 @@
 pub const BLOB_BASE: u32 = 0x10000;
 pub mod h {
     pub const BASE: u32 = 0x10000;
-    pub const SIZE: u32 = 882;
+    pub const SIZE: u32 = 958;
     pub const IMPORTS: u32 = 0x10000;
     pub const EXPORTS: Option<u32> = None;
-    pub const HELLO: u32 = 0x10020;
-    pub const TIMER: u32 = 0x10034;
-    pub const NOP_LOOP: u32 = 0x102da;
-    pub const EMPTY_LOOP: u32 = 0x102fa;
-    pub const UART_LOOP: u32 = 0x10312;
+    pub const HELLO: u32 = 0x10038;
+    pub const TIMER: u32 = 0x1004c;
+    pub const NOP_LOOP: u32 = 0x102f2;
+    pub const EMPTY_LOOP: u32 = 0x10312;
+    pub const UART_LOOP: u32 = 0x1032a;
 }
 pub mod a {
     pub const BASE: u32 = 0x10400;
-    pub const SIZE: u32 = 828;
+    pub const SIZE: u32 = 934;
     pub const IMPORTS: u32 = 0x10400;
-    pub const EXPORTS: Option<u32> = Some(0x10418);
+    pub const EXPORTS: Option<u32> = Some(0x10428);
 }
 pub mod a2 {
     pub const BASE: u32 = 0x10800;
-    pub const SIZE: u32 = 90;
+    pub const SIZE: u32 = 110;
     pub const IMPORTS: u32 = 0x10800;
     pub const EXPORTS: Option<u32> = Some(0x10808);
 }
 pub mod b {
     pub const BASE: u32 = 0x10900;
-    pub const SIZE: u32 = 3162;
+    pub const SIZE: u32 = 3230;
     pub const IMPORTS: u32 = 0x10900;
     pub const EXPORTS: Option<u32> = None;
-    pub const ECHO_ONCE: u32 = 0x10920;
-    pub const ECHO_LOOP: u32 = 0x10984;
-    pub const LOCAL_LOOP: u32 = 0x10a02;
-    pub const LOUD: u32 = 0x10ada;
-    pub const RECURSE: u32 = 0x10b3e;
+    pub const ECHO_ONCE: u32 = 0x10938;
+    pub const ECHO_LOOP: u32 = 0x1099c;
+    pub const LOCAL_LOOP: u32 = 0x10a1a;
+    pub const LOUD: u32 = 0x10af2;
+    pub const RECURSE: u32 = 0x10b56;
 }
 pub mod m {
     pub const BASE: u32 = 0x11600;
-    pub const SIZE: u32 = 38;
+    pub const SIZE: u32 = 88;
     pub const IMPORTS: u32 = 0x11600;
     pub const EXPORTS: Option<u32> = None;
-    pub const MAIN: u32 = 0x11618;
+    pub const MAIN: u32 = 0x11628;
 }
-pub const BLOB_LEN: usize = 5672;
+pub mod s1 {
+    pub const BASE: u32 = 0x11700;
+    pub const SIZE: u32 = 111;
+    pub const IMPORTS: u32 = 0x11700;
+    pub const EXPORTS: Option<u32> = Some(0x11708);
+}
+pub mod s2 {
+    pub const BASE: u32 = 0x11800;
+    pub const SIZE: u32 = 110;
+    pub const IMPORTS: u32 = 0x11800;
+    pub const EXPORTS: Option<u32> = Some(0x11808);
+}
+pub mod s3 {
+    pub const BASE: u32 = 0x11900;
+    pub const SIZE: u32 = 36;
+    pub const IMPORTS: u32 = 0x11900;
+    pub const EXPORTS: Option<u32> = None;
+}
+pub const BLOB_LEN: usize = 6436;
 pub static BLOB: [u8; BLOB_LEN] = *include_bytes!("applets.bin");

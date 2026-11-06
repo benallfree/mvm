@@ -36,12 +36,40 @@ let sum = op(0, buf.as_ptr() as u32, buf.len() as u32, 0);
 
 `op()` is a three-line `asm!("ecall")` wrapper.
 
-## Names
+## Names, and why the hash isn't trusted
 
 Names are FNV-1a 64 over the full versioned name, e.g. `kernel.uart.write.v1`
-or `test.echo.v1`. The kernel only ever sees the 8-byte hash. Readable names
-live in a dev-side table (`meshops/tests::NAMES`), which turns errors back into
-names, as round two proposed for manifests.
+or `test.echo.v1`.
+
+- **Accidental collisions aren't a worry** at 64 bits. Round two found none
+  across 1,281 names.
+- **Deliberate ones are.** FNV is easy to collide on purpose, so someone could
+  craft a name with the same hash as `kernel.uart.write.v1`. If the registry
+  trusted hashes alone, that name could shadow a kernel op.
+- **So the hash is only an index, never a security boundary:**
+  - **Manifests carry full names.** Every import and export entry has the name's
+    address and length (in the applet's own image) next to its hash.
+  - **The kernel recomputes the hash.** A hash that isn't the FNV-1a 64 of its name
+    fails the load (`NameHashMismatch`).
+  - **The registry keeps the full name in each entry,** as a slice of the code
+    blob, not a copy.
+  - **One name per hash.** Registering a name whose hash a *different* name already
+    holds fails (`HashCollision`).
+  - **Imports must match names.** An import resolves only to an entry with the same
+    name (`NameMismatch`).
+  - **Only the kernel registers `kernel.*`** (`ReservedNamespace`).
+- **Cost:** none at call time. Calls still go through the slot table and never hash
+  or compare names. The checks cost load time and 8 bytes per entry (below).
+- **Real trust** (who may publish which names) comes later, from namespace signatures.
+
+Test 8 covers this on every target:
+- S1 exports `kernel.nop.v1`;
+- S2 exports `test.echo.v1`'s hash under the name `evil.echo.v1`;
+- S3 imports with that forged pair.
+
+All three loads fail and the registry is unchanged. A *real* crafted collision
+(two consistent names, one hash) is covered by the kernel's unit tests, which
+fake the hash, since building a true FNV-1a 64 collision in a test isn't practical.
 
 ## Registry
 
@@ -49,16 +77,17 @@ names, as round two proposed for manifests.
   index of 64 `u16` buckets that maps hash → entry index.
 - **Entries never move,** so an entry index stays valid for the registry's whole
   life. Growing it means a bigger entry array and rebuilding only the bucket index.
-- **Entry:** `{ hash: u64, provider, hooks: { first: u16, count: u16 } }`, 24 bytes on Thumb.
+- **Entry:** `{ hash: u64, name: &[u8], provider, hooks: { first: u16, count: u16 } }`, 32 bytes on Thumb.
   - **Provider:** `Native(fn)` or `Guest { applet, entry address }`.
   - **`hooks`:** reserves a range in a future middleware pool. It's always empty
     this round and nothing runs it.
-- **Size:** 904 bytes for the whole registry on Thumb.
+- **Size:** 1,160 bytes for the whole registry on Thumb.
 
 ## Registration: manifest exports, at load
 
 An applet that provides ops declares them in a static export table
-(`<X>_EXPORTS`: count, then `{ hash, function, reserved }` × N, 16 bytes each).
+(`<X>_EXPORTS`: count, then `{ hash, function, name address, name length, reserved }` × N,
+24 bytes each). Imports are `{ hash, name address, name length }`, 16 bytes each.
 The kernel reads that table when the applet loads. There's no
 `kernel.op.register` call. Why:
 
@@ -76,15 +105,21 @@ Trust and namespace policy are out of scope this round.
 
 `Kernel::load(id, imports, exports)`:
 
-1. **Check:** every import must exist in the registry or in the applet's own exports.
-   Otherwise the load fails with `Error::Unresolved(hash)` and changes nothing.
-   The test runner prints `unresolved:test.nobody.v1`.
+1. **Check everything first,** so a failed load changes nothing:
+   - each hash against its name;
+   - exports against the namespace rule and the collision rule;
+   - each import must resolve, by hash *and* name, to the registry or to the
+     applet's own exports.
+
+   A missing import gives `Error::Unresolved(hash)`, which the test runner prints as
+   `unresolved:test.nobody.v1`.
 2. **Register** the applet's exports.
 3. **Bind** each import slot to its registry **entry index**, giving a 34-byte slot
    table per applet (16 × `u16` + count).
 
-**Cost:** loading H, A and B (11 imports, 3 exports) takes about 930 estimated M4
-cycles per applet, mostly the FNV-indexed lookups.
+**Cost:** loading H, A and B (11 imports, 3 exports) takes about 4,000 estimated M4
+cycles per applet. Most of it is re-hashing names and comparing them; before the
+name checks it was about 930. That's still about 60 µs at 64 MHz, once per load.
 
 ## Dispatch and nesting
 
@@ -138,7 +173,7 @@ replaces the entry in place. So when A2 registers `test.echo.v1`:
 - **Chunker:** `chunker link --base` links each applet at its own address in that
   region.
 - **Manifest format:** imports and exports have to become first-class manifest
-  fields: hash lists, with export → entry address. A loader can then resolve before
+  fields: hash *and full name* for each, with export → entry address. A loader can then resolve before
   fetching code, and a store can check that a set of applets is complete without
   running them.
 - **Build:** `meshops/build_applets.py` links each applet separately, so shared

@@ -44,6 +44,20 @@ pub const NAMES: [&str; 7] = [
     "test.nobody.v1",
 ];
 
+/// `Kind:name` for a load error (names from the dev table).
+fn why(e: Option<Error>) -> Line {
+    let mut l = Line::default();
+    let _ = match e {
+        Some(Error::ReservedNamespace(h)) => write!(l, "ReservedNamespace:{}", name_of(h)),
+        Some(Error::NameHashMismatch(h)) => write!(l, "NameHashMismatch:{}", name_of(h)),
+        Some(Error::HashCollision(h)) => write!(l, "HashCollision:{}", name_of(h)),
+        Some(Error::NameMismatch(h)) => write!(l, "NameMismatch:{}", name_of(h)),
+        Some(e) => write!(l, "{e:?}"),
+        None => write!(l, "accepted"),
+    };
+    l
+}
+
 pub fn name_of(h: u64) -> &'static str {
     NAMES
         .iter()
@@ -374,6 +388,28 @@ pub fn run_all<W: Write>(
     report.push(format_args!(
         "MO {chip} 7-swap pass={} before={before:?} loaded-before-swap={old_binding:?} loaded-after-swap={new_binding:?}",
         ok as u8
+    ));
+
+    // 8. Spoofing: a kernel name, and a forged hash/name pair on each side.
+    let before = k.registry.len();
+    let s1 = k.load(M, img::s1::IMPORTS, img::s1::EXPORTS);
+    let s2 = k.load(M, img::s2::IMPORTS, img::s2::EXPORTS);
+    let s3 = k.load(M, img::s3::IMPORTS, img::s3::EXPORTS);
+    let echo = fnv1a64("test.echo.v1");
+    let still = k.call(B, img::b::ECHO_ONCE, &[]);
+    let ok = matches!(s1, Err(Error::ReservedNamespace(h)) if h == fnv1a64("kernel.nop.v1"))
+        && matches!(s2, Err(Error::NameHashMismatch(h)) if h == echo)
+        && matches!(s3, Err(Error::NameHashMismatch(h)) if h == echo)
+        && k.registry.len() == before
+        && k.applets[M as usize].is_none()
+        && still == Ok(cs ^ 0xA2A2_0000);
+    all &= ok;
+    report.push(format_args!(
+        "MO {chip} 8-spoof pass={} kernel-name={} forged-export={} forged-import={}",
+        ok as u8,
+        why(s1.err()).as_str(),
+        why(s2.err()).as_str(),
+        why(s3.err()).as_str()
     ));
 
     for l in report.lines() {
