@@ -72,8 +72,18 @@ def phase_markers():
                 m = re.search(r"//\s*@phase:\s*(\w+)", line)
                 if m:
                     marks.append((no, m.group(1)))
-        out[os.path.join(INTERP_SRC, fn)] = marks
+        out[fn] = marks
     return out
+
+
+def interp_file(path):
+    """`lib.rs` etc. for a file under .../interp/src/, else None. Matching on the
+    suffix keeps attribution independent of where the repo is checked out (the
+    Docker image mounts it at /work)."""
+    norm = path.replace("\\", "/")
+    if "/interp/src/" not in norm:
+        return None
+    return norm.rsplit("/interp/src/", 1)[1]
 
 
 def symbolize(elf, addrs):
@@ -90,7 +100,7 @@ def symbolize(elf, addrs):
         a = int(e["Address"], 16)
         phase = None  # line 0: compiler-generated (spills, merges), resolved below
         for fr in e["Symbol"]:  # innermost first
-            fn = os.path.normpath(fr.get("FileName", ""))
+            fn = interp_file(fr.get("FileName", ""))
             if fn in marks and fr["Line"] > 0:
                 ms = marks[fn]
                 i = bisect.bisect_right([m[0] for m in ms], fr["Line"]) - 1
