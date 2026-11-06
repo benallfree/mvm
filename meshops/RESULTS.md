@@ -24,12 +24,12 @@ Each figure is the extra cost of one call over the same loop without it, so loop
 
 | Call | x86 host | ×guest | Unicorn (Cortex-M4 cost table) | ×guest | Renode nRF52840 | ×guest | QEMU ESP32-S3 | ×guest |
 |---|---|---|---|---|---|---|---|---|
-| kernel.nop.v1 | 2 | 0.8 | 216 | 7.5 | 57 | 5.0 | 4 | 3.5 |
-| kernel.uart.write.v1 (16 B, console muted) | 6 | 2.7 | 670 | 23.1 | 227 | 20.1 | 12 | 9.3 |
-| applet op test.echo.v1 (len 0, A's work ~1 instr) | 11 | 4.6 | 729 | 25.1 | 235 | 20.8 | 17 | 13.3 |
-| each extra nesting level (test.recurse.v1) | 29 | 12.4 | 902 | 31.1 | 302 | 26.8 | 26 | 20.9 |
-| host -> guest entry (Kernel::call, empty body) | 19 | 8.0 | 564 | 19.4 | 187 | 16.6 | 14 | 11.4 |
-| *one interpreted guest instruction* | 2.4 | 1 | 29.0 | 1 | 11.3 | 1 | 1.3 | 1 |
+| kernel.nop.v1 | -0 | -0.1 | 216 | 7.5 | 57 | 5.0 | 4 | 3.5 |
+| kernel.uart.write.v1 (16 B, console muted) | 5 | 1.6 | 670 | 23.1 | 227 | 20.1 | 12 | 9.3 |
+| applet op test.echo.v1 (len 0, A's work ~1 instr) | 9 | 3.1 | 729 | 25.1 | 235 | 20.8 | 17 | 13.3 |
+| each extra nesting level (test.recurse.v1) | 29 | 10.4 | 902 | 31.1 | 302 | 26.8 | 26 | 20.9 |
+| host -> guest entry (Kernel::call, empty body) | 20 | 7.0 | 564 | 19.4 | 187 | 16.6 | 14 | 11.4 |
+| *one interpreted guest instruction* | 2.8 | 1 | 29.0 | 1 | 11.3 | 1 | 1.3 | 1 |
 
 Units: x86 host: ns (wall clock); Unicorn (Cortex-M4 cost table): est. M4 cycles; Renode nRF52840: DWT units (= instrs x 0.64); QEMU ESP32-S3: CCOUNT under -icount.
 
@@ -38,12 +38,12 @@ Units: x86 host: ns (wall clock); Unicorn (Cortex-M4 cost table): est. M4 cycles
 - Registry entry: **32 B** on Thumb (8 B hash, 8 B name slice into the applet image, the provider, 4 B reserved hook range, enum/Option padding); 48 B on x86-64.
 - Whole registry (32 entries + 64-bucket index): **1160 B** on Thumb.
 - Per-applet slot table: **34 B** (16 slots × 2 B entry index + count).
-- Loading H, A and B (11 imports, 3 exports): x86 host 614 per applet, Unicorn (Cortex-M4 cost table) 3975 per applet, Renode nRF52840 1606 per applet, QEMU ESP32-S3 118 per applet.
+- Loading H, A and B (11 imports, 3 exports): x86 host 978 per applet, Unicorn (Cortex-M4 cost table) 3975 per applet, Renode nRF52840 1606 per applet, QEMU ESP32-S3 118 per applet.
 - Host stack per nesting level: 464 B on Thumb (`run_guest` + `dispatch` frames); guest stack per level: 2048 B of guest RAM. Deepest host stack in the whole Unicorn run (includes 7 nested levels): 15420 B.
 
 ## ESP32-S3 CRC16 baseline (fixed)
 
 The native baseline on the S3 is now the table-driven `kernels::crc16_table`, the same algorithm the guest image runs (round six used the bitwise loop the Xtensa toolchain emits).
-- esp32s3: interpreted 3295, native 114 → **28.9x**
+- esp32s3: interpreted 3294, native 114 → **28.9x**
 - nrf52840: interpreted 30192, native 922 → **32.7x**
 
