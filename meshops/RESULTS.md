@@ -29,12 +29,12 @@ Each figure is the extra cost of one call over the same loop without it, so loop
 
 | Call | x86 host | ×guest | Unicorn (Cortex-M4 cost table) | ×guest | Renode nRF52840 | ×guest | QEMU ESP32-S3 | ×guest |
 |---|---|---|---|---|---|---|---|---|
-| kernel.nop.v1 | 3 | 1.3 | 211 | 7.1 | 58 | 5.1 | 4 | 3.4 |
-| kernel.uart.write.v1 (16 B, console muted) | 9 | 3.5 | 326 | 11.0 | 255 | 22.4 | 13 | 10.0 |
-| applet op test.echo.v1 (len 0, A's work ~1 instr) | 22 | 8.2 | 585 | 19.7 | 192 | 16.8 | 14 | 10.8 |
-| each extra nesting level (test.recurse.v1) | 92 | 35.2 | 1445 | 48.8 | 530 | 46.4 | 54 | 41.3 |
-| host -> guest entry (Kernel::call, empty body) | 21 | 8.1 | 458 | 15.5 | 159 | 13.9 | 13 | 9.9 |
-| *one interpreted guest instruction* | 2.6 | 1 | 29.6 | 1 | 11.4 | 1 | 1.3 | 1 |
+| kernel.nop.v1 | 4 | 1.5 | 211 | 7.1 | 58 | 5.1 | 4 | 3.4 |
+| kernel.uart.write.v1 (16 B, console muted) | 4 | 1.8 | 326 | 11.0 | 97 | 8.5 | 7 | 5.2 |
+| applet op test.echo.v1 (len 0, A's work ~1 instr) | 8 | 3.5 | 585 | 19.7 | 192 | 16.8 | 14 | 10.8 |
+| each extra nesting level (test.recurse.v1) | 81 | 34.7 | 1445 | 48.8 | 530 | 46.4 | 54 | 41.3 |
+| host -> guest entry (Kernel::call, empty body) | 14 | 6.0 | 458 | 15.5 | 159 | 13.9 | 13 | 9.9 |
+| *one interpreted guest instruction* | 2.3 | 1 | 29.6 | 1 | 11.4 | 1 | 1.3 | 1 |
 
 Units: x86 host: ns (wall clock); Unicorn (Cortex-M4 cost table): est. M4 cycles; Renode nRF52840: DWT units (= instrs x 0.64); QEMU ESP32-S3: CCOUNT under -icount.
 
@@ -56,7 +56,7 @@ The nesting row is not like for like: each level of `test.recurse.v1` now runs 2
 - Registry entry: **32 B** on Thumb (8 B hash, 8 B name slice into the applet image, the provider, 4 B reserved hook range, enum/Option padding); 48 B on x86-64.
 - Whole registry (32 entries + 64-bucket index): **1160 B** on Thumb.
 - Per-applet record: **48 B** (16 import slots × 2 B, slot count, code region, static block address and length, gp).
-- Loading H, A and B (11 imports, 3 exports): x86 host 3564 per applet, Unicorn (Cortex-M4 cost table) 8453 per applet, Renode nRF52840 2981 per applet, QEMU ESP32-S3 169 per applet.
+- Loading H, A and B (11 imports, 3 exports): x86 host 3221 per applet, Unicorn (Cortex-M4 cost table) 8453 per applet, Renode nRF52840 2981 per applet, QEMU ESP32-S3 169 per applet.
 - Host stack per nesting level: **232 B** on Thumb (`run_guest`'s frame; round seven 464 B). Deepest host stack in the whole Unicorn run (includes 7 nested levels): 29668 B.
 
 ## Memory model (7b)
@@ -65,7 +65,7 @@ The nesting row is not like for like: each level of `test.recurse.v1` now runs 2
 - Shared stack per level on each target: x86 host 48 B, Unicorn (Cortex-M4 cost table) 48 B, Renode nRF52840 48 B, QEMU ESP32-S3 48 B.
 - Register files: 8 (one per nesting level) × 256 B, owned by the kernel and reused, not cleared, per call.
 - Fit check: `free=8108 result=Err(NoRoom { need: 8109, free: 8108 })`.
-- Position independence: `flash=0x31ea0,0x31dc0 ram=0x2000220c,0x20002228 image_fnv=0xe8f3986735e4d4f4 identical=1 gp_accesses=5 abs_ptrs=2`.
+- Position independence: `flash=0x31e80,0x31da0 ram=0x2000220c,0x20002228 image_fnv=0xe8f3986735e4d4f4 identical=1 gp_accesses=5 abs_ptrs=2`.
 - Two instances: `same_flash=1 blocks=0x2000220c,0x20002244 counts=Ok(3),Ok(1)`.
 - Real pointers: `ptr=Ok(536879628) block+off=0x2000220c owner=Ok(7) real=1 direct_read=Some(3)`.
 
