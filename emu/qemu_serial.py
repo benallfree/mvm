@@ -40,5 +40,7 @@ with open(log, "wb") as f:
             buf += b"\x00typed"
         while script and time.time() >= script[0][0]:
             s.sendall(script.pop(0)[1])
-        if marker in buf:
+        # Stop once the marker's whole line has arrived.
+        k = buf.find(marker)
+        if k >= 0 and b"\n" in buf[k:]:
             break

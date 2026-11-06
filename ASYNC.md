@@ -211,6 +211,79 @@ These shape the SDK:
 
 ## Results
 
-See [meshops/RESULTS.md](meshops/RESULTS.md) for the per-target tables
-(pass/fail, op costs, RAM). Summary and interpreter numbers: below, filled in
-from the final runs.
+Tests 1-19 (rounds 7-7c) still pass on all four targets. Round 7d's:
+
+| Test | x86 host | Unicorn | Renode nRF52840 | QEMU ESP32-S3 |
+|---|---|---|---|---|
+| 20 hello loop (5 x timer 50 ms + send; order, timing, 11 polls) | ✅ | ✅ | ✅ | ✅ |
+| 21 two tasks in one applet (each woken only by its own tickets) | ✅ | ✅ | ✅ | ✅ |
+| 22 two applets, 30 and 70 ms timers (polls = own completions + 1) | ✅ | ✅ | ✅ | ✅ |
+| 23 idle (no guest code between events) | ✅ | ✅ | ✅ | ✅ |
+| 24 no deadlock (nested guest op in a poll, host call, tasks pending) | ✅ | ✅ | ✅ | ✅ |
+| 25 budget (runaway faulted, tickets freed, other applet on schedule) | ✅ | ✅ | ✅ | ✅ |
+| 26 stale ticket (cancelled, reused slot, taken, other applet's) | ✅ | ✅ | ✅ | ✅ |
+| 27 inbox overflow (50 packets in 1 ms) | ✅ | ✅ | ✅ | ✅ |
+| 28 driver priority (events queued during a long guest call) | ✅ | ✅ | ✅ | skipped (no preemption, above) |
+| 29 select (both orders, same batch, late completion) | ✅ | ✅ | ✅ | ✅ |
+| 30 script inputs (pin edge / typed button, then typed packet) | n/a | n/a | ✅ | ✅ |
+
+**What the tests showed:**
+- **Hello loop:** sends start at 51, 107, 163, 219 and 275 ms on every target:
+  50 ms timer, 5 ms send, plus at most 1 ms of wake latency.
+- **Idle (210 ms window):** 10 events, 10 polls, 20 guest calls (each poll plus
+  the echo it makes), and nothing else.
+- **Overflow:**
+  - Of the 50 packets, 16 fit the inbox and 34 were dropped there
+    (`rx_dropped`).
+  - Of the 16, one went to the waiting receive and 4 to the backlog; 11 were
+    dropped at the backlog (`backlog_dropped`).
+  - The receive loop got 5, and later traffic still flowed. Nothing crashed,
+    and every packet is accounted for.
+  - Completions the drivers own are never dropped: they wait in the driver
+    until the inbox has room.
+- **Driver priority:** during a 16 ms guest call on the nRF52840, 16 driver
+  ticks ran, 6 events were queued, none were lost, and all were delivered after
+  the call. The x86 host and Unicorn show the same.
+- **Select:**
+  - Winners were G, R, G, R. The loser was cancelled each time.
+  - A late button press with no wait armed was ignored.
+  - In the same-batch round, `gpio` won because it is checked first, and the
+    packet was discarded with the cancelled receive.
+  - The radio-versus-timer round produced a stale timer completion, which the
+    kernel ignored by generation.
+
+**Costs** (Unicorn, estimated Cortex-M4 cycles; all four targets in RESULTS.md):
+
+| Operation | Cycles | Guest instructions |
+|---|---|---|
+| `ticket.check` (pending) | 246 | 8 |
+| `timer.start` | 2,617 | 87 |
+| `ticket.cancel` (pending timer) | 2,348 | 78 |
+| one select poll (kernel poll, two checks) | 2,342 | 78 |
+| wake-and-poll round trip (event in -> task resumed and re-armed) | 4,402 | 147 |
+| a runaway cut off by the default budget | 350,520 (5.5 ms at 64 MHz) | ~11,700 |
+
+- `timer.start` and `cancel` are dear mostly because each request copies a
+  40-byte ring entry, which has room for a 32-byte packet even for a timer.
+  Splitting packet sends from small requests would cut that.
+- `check` is cheap: it's on every poll, so that's the one that matters.
+
+**RAM:**
+- Ticket table: 28 B × 32 = 896 B.
+- The shared `Io` (16-entry inbox of 36 B, 32 requests of 40 B, sent log,
+  counters): 3,328 B.
+- `Applet` record: 64 B, up from 56.
+- Per task: 2 kernel bits, plus the guest's slot (its future + 16 B).
+- Futures as laid out: hello 16 B, receive 40 B (it holds the 32-byte buffer),
+  ticker 52 B, select 56 B.
+
+**Budget default and its cost:**
+- The default is **2,000 control transfers**, about 10,000 guest instructions,
+  or 5.5 ms on a 64 MHz Cortex-M4.
+- The first choice, 20,000, let a runaway hold the interpreter about 47 ms
+  under Unicorn, and the other applet's ticks slipped by that much (test 25
+  failed). With one interpreter, the budget is also the worst-case latency a
+  bad applet can add to everyone.
+- Counting costs the hot loop **+2.4% on CRC16 (35.93x → 36.79x) and +1.5% on
+  parse (24.10x → 24.46x)**. That's a decrement and a test on each jump and
+  branch, and nothing on other instructions.
