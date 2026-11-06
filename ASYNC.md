@@ -105,7 +105,7 @@ When nothing is ready, the interpreter task sleeps on the drivers' signal.
 | Chip | Interpreter (lowest) | Drivers (higher) |
 |---|---|---|
 | nRF52840 (Renode) | `main` on the thread-mode executor; sleeps with WFE on `WAKE` | `InterruptExecutor` on EGU0/SWI0 at P6, running the 1 ms `Ticker` task (which also samples the P0.03 button) and the UART script reader. RTC1 (embassy-time) at P5. |
-| ESP32-S3 (QEMU) | `main` in thread mode | **No preemptive driver context** (see below): the interpreter's wait loop runs one driver tick per 240,000 CCOUNT (1 ms at 240 MHz) and drains the UART for the script. |
+| ESP32-S3 (QEMU) | `main` in thread mode | **No preemptive driver context** (see below): the interpreter's wait loop runs one driver tick per 24,000 CCOUNT and drains the UART for the script. One driver millisecond is a tenth of a real one: under `-icount` a busy-waited real millisecond costs about a million emulated instructions, which made the suite take over ten minutes. Tests measure time in driver ms, so they're unaffected; guest code just looks 10× slower against this clock. |
 | x86 host | the main thread | a second thread ticking every millisecond of wall time, truly concurrent with guest code |
 | Unicorn | `mo_run` | the harness raises an "interrupt" every 64,000 estimated cycles (1 ms at 64 MHz): it saves the registers at an instruction boundary outside IT blocks, runs `mo_irq`, and restores them. `mo_idle` (the WFI) skips ahead to the next tick. |
 

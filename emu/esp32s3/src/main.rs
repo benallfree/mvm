@@ -8,7 +8,7 @@
 //! (esp-rtos's scheduler tick, a TIMG0 periodic timer interrupt, and the
 //! Xtensa core timer CCOMPARE0 with a handler that only re-arms it). So on
 //! this target the fake drivers tick *cooperatively*: the interpreter's wait
-//! loop runs one driver tick per millisecond of CCOUNT (240,000 at 240 MHz)
+//! loop runs one driver tick per 24,000 CCOUNT (a tenth of a millisecond at 240 MHz)
 //! and drains the UART for the test-30 script. Every async test runs except
 //! 28 (drivers preempting a long guest call), which needs a preemptive
 //! driver context and reports itself as skipped. See ASYNC.md.
@@ -26,8 +26,13 @@ use mvm_meshops_tests::asynct::{driver_tick, script_line, Platform};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-/// One millisecond of CCOUNT at the nominal 240 MHz.
-const TICK: u32 = 240_000;
+/// One driver millisecond: 24,000 CCOUNT, a tenth of a real millisecond at
+/// the nominal 240 MHz. The wait loop busy-waits (no interrupts here), and
+/// under `-icount` QEMU each real millisecond costs about a million emulated
+/// instructions, so a full-speed clock made the async tests take over ten
+/// minutes. Every test measures time in driver ms, so they're unaffected;
+/// guest code just looks 10x slower against this clock.
+const TICK: u32 = 24_000;
 
 /// Drivers ticked from the wait loop (no preemption on this target).
 struct Plat {

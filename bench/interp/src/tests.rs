@@ -188,3 +188,33 @@ fn loads_reach_other_regions() {
     assert_eq!(mem.load(0x9000, 2), Ok(0x1234_5678));
     assert!(mem.load(0x9004, 2).is_err());
 }
+
+#[test]
+fn fast_budget_stops_a_long_run() {
+    // Round 7d: a small budget stops crc16 (a loop) with Stop::Budget; a big
+    // one lets it finish with the right answer.
+    let data = CRC_DATA.to_vec();
+    for (budget, want_stop) in [(50u32, true), (u32::MAX, false)] {
+        let mut ram = vec![0u8; 8192];
+        ram[..data.len()].copy_from_slice(&data);
+        let mut mem = Mem {
+            image: &img::IMAGE,
+            image_base: img::BASE,
+            ram: &mut ram,
+            ram_base: RAM_BASE,
+            others: &[],
+        };
+        let mut table = vec![fast::E::EMPTY; img::IMAGE_LEN / 2];
+        let mut cpu = fast::Cpu::new();
+        cpu.start(&mem, table.len(), img::CRC16, &[RAM_BASE, data.len() as u32], RAM_BASE + 8192, 0)
+            .unwrap();
+        cpu.budget = budget;
+        let r = cpu.run(&mut mem, &mut table).unwrap();
+        if want_stop {
+            assert_eq!(r, fast::Stop::Budget);
+            assert_eq!(cpu.budget, 0);
+        } else {
+            assert_eq!(r, fast::Stop::Returned(native(img::CRC16, &data)));
+        }
+    }
+}

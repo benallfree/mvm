@@ -379,7 +379,7 @@ impl<'a, P: Platform> ARun<'_, 'a, P> {
     }
 
     /// 24. A mesh op into another applet's guest code (A's test.echo.v1),
-    /// from inside polls and from the host, while async tasks are pending.
+    ///     from inside polls and from the host, while async tasks are pending.
     async fn no_deadlock(&mut self) {
         let pending = self.k.live_tickets();
         let want = checksum(b"tick");
@@ -605,7 +605,7 @@ impl<'a, P: Platform> ARun<'_, 'a, P> {
     }
 
     /// 29. Select: button (GPIO 3) or radio, in both orders and in one batch;
-    /// then radio against a timer, whose late completion must be ignored.
+    ///     then radio against a timer, whose late completion must be ignored.
     async fn select(&mut self) {
         cap_take();
         let s0 = *self.k.exec_stats();
