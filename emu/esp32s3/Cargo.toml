@@ -10,6 +10,10 @@ esp-bootloader-esp-idf = { version = "0.4", features = ["esp32s3"] }
 # esp-hal is pinned to 1.0.0: from 1.1 its ESP32-S3 PLL bring-up waits on a
 # BBPLL calibration bit that Espressif's QEMU never sets (see emu/RESULTS.md).
 esp-hal = { version = "=1.0.0", features = ["esp32s3", "unstable"] }
+esp-rtos = { version = "0.1", features = ["esp32s3", "embassy"] }
+embassy-executor = "0.9"
+embassy-time = "0.5"
+embassy-sync = "0.7"
 esp-println = { version = "0.16", default-features = false, features = ["esp32s3", "uart", "critical-section"] }
 
 [profile.release]

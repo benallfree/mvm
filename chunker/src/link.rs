@@ -471,6 +471,18 @@ pub fn link_pic(store: &Store, roots: &[usize], threshold: u32) -> Result<PicIma
                     if seg != Seg::Flash {
                         return Err(format!("{}: pointer to RAM stored in flash at {at:#x}", c.origin));
                     }
+                    // A code address in flash data would be jumped to as an
+                    // image offset (a jump table, a vtable). Only export
+                    // tables may hold one: the build tool reads them, the
+                    // guest never does.
+                    let to_code = matches!(s.target, Target::Chunk(j)
+                        if store.chunks[store.canonical(j)].kind == crate::chunk::Kind::Text);
+                    if to_code && !c.origin.ends_with("_EXPORTS") {
+                        return Err(format!(
+                            "{}: code address stored in flash data at {at:#x} (a jump table or function-pointer table?) can't be position independent",
+                            c.origin
+                        ));
+                    }
                     or32(&mut buf, at, v as u32);
                     img.abs_flash.push((c.origin.clone(), s.at));
                 }

@@ -8,3 +8,4 @@ edition = "2021"
 
 [dependencies]
 mvm-abi = { path = "../../abi" }
+mvm-rt = { path = "../mvm-rt" }

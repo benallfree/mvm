@@ -31,6 +31,39 @@ pub mod names {
     /// Round 7c: the kernel sums `len` bytes at a guest pointer (proves the
     /// pointer is a real address the kernel can read).
     pub const MEM_SUM: &str = "kernel.mem.sum.v1";
+    // Round 7d: async ops. None of them waits: each starts the work and
+    // returns a ticket (0 = refused), or reports on one.
+    pub const TIMER_START: &str = "kernel.timer.start.v1";
+    pub const TICKET_CHECK: &str = "kernel.ticket.check.v1";
+    pub const TICKET_CANCEL: &str = "kernel.ticket.cancel.v1";
+    pub const TASK_SPAWN: &str = "kernel.task.spawn.v1";
+    pub const RADIO_SEND: &str = "kernel.radio.send.v1";
+    pub const RADIO_RECV: &str = "kernel.radio.recv.v1";
+    pub const GPIO_WAIT: &str = "kernel.gpio.wait.v1";
+}
+
+/// Round 7d: the async ABI (see ASYNC.md).
+pub mod asyncabi {
+    /// `kernel.ticket.check.v1` status (a0); the result is in a1.
+    pub const PENDING: u32 = 0;
+    pub const DONE: u32 = 1;
+    /// Not a live ticket of the caller's: never issued, already taken,
+    /// cancelled, or reused since (the generation doesn't match).
+    pub const INVALID: u32 = 2;
+    /// What an applet's `poll(task)` returns.
+    pub const POLL_PENDING: u32 = 0;
+    pub const POLL_DONE: u32 = 1;
+    /// `kernel.gpio.wait.v1` edges.
+    pub const RISING: u32 = 1;
+    pub const FALLING: u32 = 2;
+    pub const ANY_EDGE: u32 = 3;
+    /// Task slots per applet.
+    pub const MAX_TASKS: u32 = 8;
+    /// Largest radio packet.
+    pub const MAX_PACKET: usize = 32;
+    /// The names an async applet exports for the kernel to call.
+    pub const INIT: &str = "init";
+    pub const POLL: &str = "poll";
 }
 
 /// Only the kernel may register names starting with this.

@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 mvm-kernel = { path = "../kernel" }
 interp = { path = "../../bench/interp" }
+mvm-abi = { path = "../../abi" }
 
 [features]
 # Count guest instructions per section (host only; it slows the interpreter).

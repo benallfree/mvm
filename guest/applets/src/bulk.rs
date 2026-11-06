@@ -41,9 +41,9 @@ static mut TAIL: [u32; 64] = [0; 64];
 static mut FILLS: u32 = 0;
 static mut SEED: u32 = 0x1234_5678;
 /// A pointer into bulk, stored in the gp window (a load-time data reloc gp -> bulk).
-static mut WORDS_PTR: *mut u32 = unsafe { addr_of_mut!(WORDS) as *mut u32 };
+static mut WORDS_PTR: *mut u32 = addr_of_mut!(WORDS) as *mut u32;
 /// 64 pointers back into the gp window, stored in bulk (256 B: data relocs bulk -> gp).
-static mut FILLS_PTRS: [*const u32; 64] = [unsafe { addr_of!(FILLS) }; 64];
+static mut FILLS_PTRS: [*const u32; 64] = [addr_of!(FILLS); 64];
 /// Bumped by the gp access-cost loop.
 static mut TOUCHES: u32 = 0;
 

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["testcrate", "helper", "applet", "kernels", "applets"]
+members = ["testcrate", "helper", "applet", "kernels", "applets", "mvm-rt"]
 
 [profile.release]
 panic = "abort"

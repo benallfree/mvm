@@ -17,6 +17,8 @@ pub mod h {
         gp: Segment { size: 0, align: 4, init: &GP_INIT },
         bulk: Segment { size: 0, align: 4, init: &BULK_INIT },
         bulk_slots: 0,
+        init: None,
+        poll: None,
         data_relocs: &DATA_RELOCS,
         imports: &IMPORTS,
         exports: &EXPORTS,
@@ -48,6 +50,8 @@ pub mod a {
         gp: Segment { size: 0, align: 4, init: &GP_INIT },
         bulk: Segment { size: 0, align: 4, init: &BULK_INIT },
         bulk_slots: 0,
+        init: None,
+        poll: None,
         data_relocs: &DATA_RELOCS,
         imports: &IMPORTS,
         exports: &EXPORTS,
@@ -74,6 +78,8 @@ pub mod a2 {
         gp: Segment { size: 0, align: 4, init: &GP_INIT },
         bulk: Segment { size: 0, align: 4, init: &BULK_INIT },
         bulk_slots: 0,
+        init: None,
+        poll: None,
         data_relocs: &DATA_RELOCS,
         imports: &IMPORTS,
         exports: &EXPORTS,
@@ -100,6 +106,8 @@ pub mod b {
         gp: Segment { size: 0, align: 4, init: &GP_INIT },
         bulk: Segment { size: 0, align: 4, init: &BULK_INIT },
         bulk_slots: 0,
+        init: None,
+        poll: None,
         data_relocs: &DATA_RELOCS,
         imports: &IMPORTS,
         exports: &EXPORTS,
@@ -131,6 +139,8 @@ pub mod m {
         gp: Segment { size: 0, align: 4, init: &GP_INIT },
         bulk: Segment { size: 0, align: 4, init: &BULK_INIT },
         bulk_slots: 0,
+        init: None,
+        poll: None,
         data_relocs: &DATA_RELOCS,
         imports: &IMPORTS,
         exports: &EXPORTS,
@@ -158,6 +168,8 @@ pub mod s1 {
         gp: Segment { size: 0, align: 4, init: &GP_INIT },
         bulk: Segment { size: 0, align: 4, init: &BULK_INIT },
         bulk_slots: 0,
+        init: None,
+        poll: None,
         data_relocs: &DATA_RELOCS,
         imports: &IMPORTS,
         exports: &EXPORTS,
@@ -184,6 +196,8 @@ pub mod s2 {
         gp: Segment { size: 0, align: 4, init: &GP_INIT },
         bulk: Segment { size: 0, align: 4, init: &BULK_INIT },
         bulk_slots: 0,
+        init: None,
+        poll: None,
         data_relocs: &DATA_RELOCS,
         imports: &IMPORTS,
         exports: &EXPORTS,
@@ -210,6 +224,8 @@ pub mod s3 {
         gp: Segment { size: 0, align: 4, init: &GP_INIT },
         bulk: Segment { size: 0, align: 4, init: &BULK_INIT },
         bulk_slots: 0,
+        init: None,
+        poll: None,
         data_relocs: &DATA_RELOCS,
         imports: &IMPORTS,
         exports: &EXPORTS,
@@ -238,6 +254,8 @@ pub mod c {
         gp: Segment { size: 28, align: 4, init: &GP_INIT },
         bulk: Segment { size: 0, align: 4, init: &BULK_INIT },
         bulk_slots: 0,
+        init: None,
+        poll: None,
         data_relocs: &DATA_RELOCS,
         imports: &IMPORTS,
         exports: &EXPORTS,
@@ -272,6 +290,8 @@ pub mod d {
         gp: Segment { size: 36, align: 4, init: &GP_INIT },
         bulk: Segment { size: 17280, align: 4, init: &BULK_INIT },
         bulk_slots: 5,
+        init: None,
+        poll: None,
         data_relocs: &DATA_RELOCS,
         imports: &IMPORTS,
         exports: &EXPORTS,
@@ -327,6 +347,8 @@ pub mod e {
         gp: Segment { size: 3976, align: 4, init: &GP_INIT },
         bulk: Segment { size: 1152, align: 4, init: &BULK_INIT },
         bulk_slots: 1,
+        init: None,
+        poll: None,
         data_relocs: &DATA_RELOCS,
         imports: &IMPORTS,
         exports: &EXPORTS,
@@ -341,6 +363,230 @@ pub mod e {
     pub const BULK_STATICS: usize = 9;
     pub const PROMOTED: usize = 0;
     pub const SPILLED: usize = 9;
+}
+pub mod f {
+    use super::*;
+    pub static IMAGE: Img<1636> = Img(*include_bytes!("f.bin"));
+    pub static GP_INIT: [u8; 4] = *include_bytes!("f.static");
+    pub static BULK_INIT: [u8; 0] = *include_bytes!("f.bulk");
+    pub static IMPORTS: [Import; 8] = [Import { hash: 0xadca758cc94c138f, name: "kernel.ticket.check.v1" }, Import { hash: 0xcc8b61a21d0565e5, name: "kernel.ticket.cancel.v1" }, Import { hash: 0xac451a5e950b7451, name: "kernel.task.spawn.v1" }, Import { hash: 0x2c0844442013e4f4, name: "kernel.timer.start.v1" }, Import { hash: 0x6ac9df725d29bfc2, name: "kernel.radio.send.v1" }, Import { hash: 0xb9c4059589c7afcc, name: "kernel.radio.recv.v1" }, Import { hash: 0xf30be17f29711b7f, name: "kernel.gpio.wait.v1" }, Import { hash: 0xe90919cc41d7940e, name: "kernel.uart.write.v1" }];
+    pub static EXPORTS: [Export; 0] = [];
+    pub static DATA_RELOCS: [DataReloc; 0] = [];
+    pub static MANIFEST: Manifest = Manifest {
+        image: &IMAGE.0,
+        gp: Segment { size: 16, align: 4, init: &GP_INIT },
+        bulk: Segment { size: 352, align: 8, init: &BULK_INIT },
+        bulk_slots: 1,
+        init: Some(136),
+        poll: Some(278),
+        data_relocs: &DATA_RELOCS,
+        imports: &IMPORTS,
+        exports: &EXPORTS,
+    };
+    pub const INIT: u32 = 136;
+    pub const POLL: u32 = 278;
+    pub const STAT: u32 = 364;
+    pub const ABS_FLASH_POINTERS: usize = 9;
+    pub const GP_REWRITES: usize = 6;
+    pub const BULK_REWRITES: usize = 4;
+    pub const STATICS: usize = 4;
+    pub const STATIC_BYTES: u32 = 364;
+    pub const BULK_STATICS: usize = 1;
+    pub const PROMOTED: usize = 0;
+    pub const SPILLED: usize = 0;
+}
+pub mod t1 {
+    use super::*;
+    pub static IMAGE: Img<904> = Img(*include_bytes!("t1.bin"));
+    pub static GP_INIT: [u8; 0] = *include_bytes!("t1.static");
+    pub static BULK_INIT: [u8; 0] = *include_bytes!("t1.bulk");
+    pub static IMPORTS: [Import; 8] = [Import { hash: 0xadca758cc94c138f, name: "kernel.ticket.check.v1" }, Import { hash: 0xcc8b61a21d0565e5, name: "kernel.ticket.cancel.v1" }, Import { hash: 0xac451a5e950b7451, name: "kernel.task.spawn.v1" }, Import { hash: 0x2c0844442013e4f4, name: "kernel.timer.start.v1" }, Import { hash: 0x6ac9df725d29bfc2, name: "kernel.radio.send.v1" }, Import { hash: 0xb9c4059589c7afcc, name: "kernel.radio.recv.v1" }, Import { hash: 0xf30be17f29711b7f, name: "kernel.gpio.wait.v1" }, Import { hash: 0xa406c42cdf9e0fef, name: "test.echo.v1" }];
+    pub static EXPORTS: [Export; 0] = [];
+    pub static DATA_RELOCS: [DataReloc; 0] = [];
+    pub static MANIFEST: Manifest = Manifest {
+        image: &IMAGE.0,
+        gp: Segment { size: 188, align: 8, init: &GP_INIT },
+        bulk: Segment { size: 0, align: 4, init: &BULK_INIT },
+        bulk_slots: 0,
+        init: Some(136),
+        poll: Some(246),
+        data_relocs: &DATA_RELOCS,
+        imports: &IMPORTS,
+        exports: &EXPORTS,
+    };
+    pub const INIT: u32 = 136;
+    pub const POLL: u32 = 246;
+    pub const STAT: u32 = 328;
+    pub const HALT: u32 = 394;
+    pub const ABS_FLASH_POINTERS: usize = 9;
+    pub const GP_REWRITES: usize = 13;
+    pub const BULK_REWRITES: usize = 0;
+    pub const STATICS: usize = 5;
+    pub const STATIC_BYTES: u32 = 188;
+    pub const BULK_STATICS: usize = 0;
+    pub const PROMOTED: usize = 0;
+    pub const SPILLED: usize = 0;
+}
+pub mod t2 {
+    use super::*;
+    pub static IMAGE: Img<908> = Img(*include_bytes!("t2.bin"));
+    pub static GP_INIT: [u8; 0] = *include_bytes!("t2.static");
+    pub static BULK_INIT: [u8; 0] = *include_bytes!("t2.bulk");
+    pub static IMPORTS: [Import; 8] = [Import { hash: 0xadca758cc94c138f, name: "kernel.ticket.check.v1" }, Import { hash: 0xcc8b61a21d0565e5, name: "kernel.ticket.cancel.v1" }, Import { hash: 0xac451a5e950b7451, name: "kernel.task.spawn.v1" }, Import { hash: 0x2c0844442013e4f4, name: "kernel.timer.start.v1" }, Import { hash: 0x6ac9df725d29bfc2, name: "kernel.radio.send.v1" }, Import { hash: 0xb9c4059589c7afcc, name: "kernel.radio.recv.v1" }, Import { hash: 0xf30be17f29711b7f, name: "kernel.gpio.wait.v1" }, Import { hash: 0xa406c42cdf9e0fef, name: "test.echo.v1" }];
+    pub static EXPORTS: [Export; 0] = [];
+    pub static DATA_RELOCS: [DataReloc; 0] = [];
+    pub static MANIFEST: Manifest = Manifest {
+        image: &IMAGE.0,
+        gp: Segment { size: 188, align: 8, init: &GP_INIT },
+        bulk: Segment { size: 0, align: 4, init: &BULK_INIT },
+        bulk_slots: 0,
+        init: Some(136),
+        poll: Some(248),
+        data_relocs: &DATA_RELOCS,
+        imports: &IMPORTS,
+        exports: &EXPORTS,
+    };
+    pub const INIT: u32 = 136;
+    pub const POLL: u32 = 248;
+    pub const STAT: u32 = 330;
+    pub const HALT: u32 = 396;
+    pub const ABS_FLASH_POINTERS: usize = 9;
+    pub const GP_REWRITES: usize = 13;
+    pub const BULK_REWRITES: usize = 0;
+    pub const STATICS: usize = 5;
+    pub const STATIC_BYTES: u32 = 188;
+    pub const BULK_STATICS: usize = 0;
+    pub const PROMOTED: usize = 0;
+    pub const SPILLED: usize = 0;
+}
+pub mod r {
+    use super::*;
+    pub static IMAGE: Img<588> = Img(*include_bytes!("r.bin"));
+    pub static GP_INIT: [u8; 0] = *include_bytes!("r.static");
+    pub static BULK_INIT: [u8; 0] = *include_bytes!("r.bulk");
+    pub static IMPORTS: [Import; 7] = [Import { hash: 0xadca758cc94c138f, name: "kernel.ticket.check.v1" }, Import { hash: 0xcc8b61a21d0565e5, name: "kernel.ticket.cancel.v1" }, Import { hash: 0xac451a5e950b7451, name: "kernel.task.spawn.v1" }, Import { hash: 0x2c0844442013e4f4, name: "kernel.timer.start.v1" }, Import { hash: 0x6ac9df725d29bfc2, name: "kernel.radio.send.v1" }, Import { hash: 0xb9c4059589c7afcc, name: "kernel.radio.recv.v1" }, Import { hash: 0xf30be17f29711b7f, name: "kernel.gpio.wait.v1" }];
+    pub static EXPORTS: [Export; 0] = [];
+    pub static DATA_RELOCS: [DataReloc; 0] = [];
+    pub static MANIFEST: Manifest = Manifest {
+        image: &IMAGE.0,
+        gp: Segment { size: 88, align: 8, init: &GP_INIT },
+        bulk: Segment { size: 0, align: 4, init: &BULK_INIT },
+        bulk_slots: 0,
+        init: Some(120),
+        poll: Some(184),
+        data_relocs: &DATA_RELOCS,
+        imports: &IMPORTS,
+        exports: &EXPORTS,
+    };
+    pub const INIT: u32 = 120;
+    pub const POLL: u32 = 184;
+    pub const STAT: u32 = 266;
+    pub const ABS_FLASH_POINTERS: usize = 7;
+    pub const GP_REWRITES: usize = 8;
+    pub const BULK_REWRITES: usize = 0;
+    pub const STATICS: usize = 3;
+    pub const STATIC_BYTES: u32 = 88;
+    pub const BULK_STATICS: usize = 0;
+    pub const PROMOTED: usize = 0;
+    pub const SPILLED: usize = 0;
+}
+pub mod s {
+    use super::*;
+    pub static IMAGE: Img<3372> = Img(*include_bytes!("s.bin"));
+    pub static GP_INIT: [u8; 0] = *include_bytes!("s.static");
+    pub static BULK_INIT: [u8; 0] = *include_bytes!("s.bulk");
+    pub static IMPORTS: [Import; 8] = [Import { hash: 0xadca758cc94c138f, name: "kernel.ticket.check.v1" }, Import { hash: 0xcc8b61a21d0565e5, name: "kernel.ticket.cancel.v1" }, Import { hash: 0xac451a5e950b7451, name: "kernel.task.spawn.v1" }, Import { hash: 0x2c0844442013e4f4, name: "kernel.timer.start.v1" }, Import { hash: 0x6ac9df725d29bfc2, name: "kernel.radio.send.v1" }, Import { hash: 0xb9c4059589c7afcc, name: "kernel.radio.recv.v1" }, Import { hash: 0xf30be17f29711b7f, name: "kernel.gpio.wait.v1" }, Import { hash: 0xe90919cc41d7940e, name: "kernel.uart.write.v1" }];
+    pub static EXPORTS: [Export; 0] = [];
+    pub static DATA_RELOCS: [DataReloc; 0] = [];
+    pub static MANIFEST: Manifest = Manifest {
+        image: &IMAGE.0,
+        gp: Segment { size: 224, align: 8, init: &GP_INIT },
+        bulk: Segment { size: 0, align: 4, init: &BULK_INIT },
+        bulk_slots: 0,
+        init: Some(136),
+        poll: Some(210),
+        data_relocs: &DATA_RELOCS,
+        imports: &IMPORTS,
+        exports: &EXPORTS,
+    };
+    pub const INIT: u32 = 136;
+    pub const POLL: u32 = 210;
+    pub const STAT: u32 = 294;
+    pub const ABS_FLASH_POINTERS: usize = 10;
+    pub const GP_REWRITES: usize = 11;
+    pub const BULK_REWRITES: usize = 0;
+    pub const STATICS: usize = 4;
+    pub const STATIC_BYTES: u32 = 224;
+    pub const BULK_STATICS: usize = 0;
+    pub const PROMOTED: usize = 0;
+    pub const SPILLED: usize = 0;
+}
+pub mod x {
+    use super::*;
+    pub static IMAGE: Img<1784> = Img(*include_bytes!("x.bin"));
+    pub static GP_INIT: [u8; 0] = *include_bytes!("x.static");
+    pub static BULK_INIT: [u8; 0] = *include_bytes!("x.bulk");
+    pub static IMPORTS: [Import; 7] = [Import { hash: 0xadca758cc94c138f, name: "kernel.ticket.check.v1" }, Import { hash: 0xcc8b61a21d0565e5, name: "kernel.ticket.cancel.v1" }, Import { hash: 0xac451a5e950b7451, name: "kernel.task.spawn.v1" }, Import { hash: 0x2c0844442013e4f4, name: "kernel.timer.start.v1" }, Import { hash: 0x6ac9df725d29bfc2, name: "kernel.radio.send.v1" }, Import { hash: 0xb9c4059589c7afcc, name: "kernel.radio.recv.v1" }, Import { hash: 0xf30be17f29711b7f, name: "kernel.gpio.wait.v1" }];
+    pub static EXPORTS: [Export; 0] = [];
+    pub static DATA_RELOCS: [DataReloc; 0] = [];
+    pub static MANIFEST: Manifest = Manifest {
+        image: &IMAGE.0,
+        gp: Segment { size: 292, align: 8, init: &GP_INIT },
+        bulk: Segment { size: 0, align: 4, init: &BULK_INIT },
+        bulk_slots: 0,
+        init: Some(120),
+        poll: Some(256),
+        data_relocs: &DATA_RELOCS,
+        imports: &IMPORTS,
+        exports: &EXPORTS,
+    };
+    pub const INIT: u32 = 120;
+    pub const POLL: u32 = 256;
+    pub const START: u32 = 338;
+    pub const CHECK: u32 = 350;
+    pub const CANCEL: u32 = 366;
+    pub const WAKES: u32 = 378;
+    pub const CHECK_LOOP: u32 = 388;
+    pub const EMPTY_LOOP: u32 = 422;
+    pub const START16: u32 = 454;
+    pub const CANCEL16: u32 = 924;
+    pub const ABS_FLASH_POINTERS: usize = 7;
+    pub const GP_REWRITES: usize = 36;
+    pub const BULK_REWRITES: usize = 0;
+    pub const STATICS: usize = 18;
+    pub const STATIC_BYTES: u32 = 292;
+    pub const BULK_STATICS: usize = 0;
+    pub const PROMOTED: usize = 0;
+    pub const SPILLED: usize = 0;
+}
+pub mod l {
+    use super::*;
+    pub static IMAGE: Img<44> = Img(*include_bytes!("l.bin"));
+    pub static GP_INIT: [u8; 0] = *include_bytes!("l.static");
+    pub static BULK_INIT: [u8; 0] = *include_bytes!("l.bulk");
+    pub static IMPORTS: [Import; 0] = [];
+    pub static EXPORTS: [Export; 0] = [];
+    pub static DATA_RELOCS: [DataReloc; 0] = [];
+    pub static MANIFEST: Manifest = Manifest {
+        image: &IMAGE.0,
+        gp: Segment { size: 4, align: 4, init: &GP_INIT },
+        bulk: Segment { size: 0, align: 4, init: &BULK_INIT },
+        bulk_slots: 0,
+        init: None,
+        poll: None,
+        data_relocs: &DATA_RELOCS,
+        imports: &IMPORTS,
+        exports: &EXPORTS,
+    };
+    pub const SPIN: u32 = 8;
+    pub const ABS_FLASH_POINTERS: usize = 0;
+    pub const GP_REWRITES: usize = 1;
+    pub const BULK_REWRITES: usize = 0;
+    pub const STATICS: usize = 1;
+    pub const STATIC_BYTES: u32 = 4;
+    pub const BULK_STATICS: usize = 0;
+    pub const PROMOTED: usize = 0;
+    pub const SPILLED: usize = 0;
 }
 /// Test 7: writable statics in guest/applets/src/bulk.rs, all without attributes.
 pub const PLAIN_STATICS: usize = 49;

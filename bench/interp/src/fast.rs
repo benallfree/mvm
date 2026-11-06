@@ -289,6 +289,9 @@ pub enum Stop {
     /// elsewhere; the link register is already written). The host finds the
     /// region holding `target` and calls [`Cpu::resume_at`], then `run`.
     Jump(u32),
+    /// Round 7d: the instruction budget ran out (see [`Cpu::budget`]). The
+    /// call is abandoned, not resumable.
+    Budget,
 }
 
 pub struct Cpu {
@@ -296,6 +299,13 @@ pub struct Cpu {
     pub x: [u32; 64],
     /// Where `run` continues (a table slot index).
     ip: usize,
+    /// Round 7d: control transfers (jumps and branches, taken or not) left
+    /// before `run` stops with [`Stop::Budget`]. Every loop and every
+    /// recursion executes one per iteration, so a runaway guest is always
+    /// caught; straight-line code between two is bounded by the image size.
+    /// Counting these instead of every instruction keeps the cost off the
+    /// dispatch path. `u32::MAX` is effectively unlimited.
+    pub budget: u32,
     #[cfg(feature = "count")]
     pub steps: u64,
 }
@@ -311,6 +321,7 @@ impl Cpu {
         Cpu {
             x: [0; 64],
             ip: 0,
+            budget: u32::MAX,
             #[cfg(feature = "count")]
             steps: 0,
         }
@@ -336,6 +347,7 @@ impl Cpu {
                 mem.image_base.wrapping_add(2 * self.ip as u32),
             )),
             Stop::Jump(t) => Err(Fault::Fetch(t)),
+            Stop::Budget => Err(Fault::Fetch(0)),
         }
     }
 
@@ -397,7 +409,18 @@ impl Cpu {
             }
         };
         let mut ip = self.ip;
+        let mut budget = self.budget;
         let x = &mut self.x;
+        // One control transfer: count it, stop when the budget is spent.
+        macro_rules! tick {
+            () => {{
+                budget = budget.wrapping_sub(1);
+                if budget == 0 {
+                    self.budget = 0;
+                    return Ok(Stop::Budget);
+                }
+            }};
+        }
         loop {
             #[cfg(feature = "count")]
             {
@@ -415,13 +438,14 @@ impl Cpu {
             // @phase: execute
             // One arm per op (a nested match would be a second dispatch).
             macro_rules! br {
-                ($f:expr) => {
+                ($f:expr) => {{
+                    tick!();
                     ip = if $f(x[r1], x[r2]) {
                         e.imm as usize
                     } else {
                         next
                     }
-                };
+                }};
             }
             macro_rules! ld {
                 ($f3:expr) => {{
@@ -468,23 +492,35 @@ impl Cpu {
                     ip = next;
                 }
                 Op::Jal => {
+                    tick!();
                     x[rd] = base.wrapping_add(2 * next as u32);
                     ip = e.imm as usize;
                 }
                 Op::Jalr => {
+                    tick!();
                     let t = x[r1].wrapping_add(e.imm as u32) & !1;
                     x[rd] = base.wrapping_add(2 * next as u32);
                     if t == EXIT {
+                        self.budget = budget;
                         return Ok(Stop::Returned(x[10]));
                     }
                     match to_slot(t) {
                         Ok(s) => ip = s,
                         // Code in another region (a far jal, or a return across regions).
-                        Err(_) => return Ok(Stop::Jump(t)),
+                        Err(_) => {
+                            self.budget = budget;
+                            return Ok(Stop::Jump(t));
+                        }
                     }
                 }
-                Op::Beqz => ip = if x[r1] == 0 { e.imm as usize } else { next },
-                Op::Bnez => ip = if x[r1] != 0 { e.imm as usize } else { next },
+                Op::Beqz => {
+                    tick!();
+                    ip = if x[r1] == 0 { e.imm as usize } else { next }
+                }
+                Op::Bnez => {
+                    tick!();
+                    ip = if x[r1] != 0 { e.imm as usize } else { next }
+                }
                 Op::Beq => br!(|a: u32, b: u32| a == b),
                 Op::Bne => br!(|a: u32, b: u32| a != b),
                 Op::Blt => br!(|a: u32, b: u32| (a as i32) < (b as i32)),
@@ -529,6 +565,7 @@ impl Cpu {
                 Op::Ecall => {
                     // Decode proved `next` is in range (ecall can fall through).
                     self.ip = next;
+                    self.budget = budget;
                     return Ok(Stop::Ecall);
                 }
                 Op::Illegal => return Err(Fault::Illegal(base.wrapping_add(2 * ip as u32))),

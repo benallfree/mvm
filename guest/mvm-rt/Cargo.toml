@@ -1,0 +1,9 @@
+[package]
+name = "mvm-rt"
+version = "0.1.0"
+edition = "2021"
+
+# Round 7d: the hand-written guest async runtime (tickets, select, task
+# slots). No heap, no macros, no executor: the kernel is the executor.
+[dependencies]
+mvm-abi = { path = "../../abi" }

@@ -39,6 +39,15 @@ APPLETS = [
     ("d", ["d_fill", "d_sum", "d_kernel_sum", "d_addr", "d_owner", "d_squares_sum", "d_bump", "d_tail", "d_ptrs_ok", "d_ptr_set", "d_corners_set",
            "d_corners_get", "d_gp_loop", "d_bulk_loop", "d_none_loop"], None, []),
     ("e", ["e_sum", "e_fill"], None, []),
+    # Round 7d: async applets (init + poll exports, mvm-rt futures).
+    ("f", ["f_init", "f_poll", "f_stat"], None, []),
+    ("t1", ["t1_init", "t1_poll", "t1_stat", "t1_halt"], None, []),
+    ("t2", ["t2_init", "t2_poll", "t2_stat", "t2_halt"], None, []),
+    ("r", ["r_init", "r_poll", "r_stat"], None, []),
+    ("s", ["s_init", "s_poll", "s_stat"], None, []),
+    ("x", ["x_init", "x_poll", "x_start", "x_check", "x_cancel", "x_wakes", "x_check_loop",
+           "x_empty_loop", "x_start16", "x_cancel16"], None, []),
+    ("l", ["l_spin"], None, []),
 ]
 # Ordinary (un-annotated, so mangled) statics whose placement the tests need:
 # (applet, const name, a substring of the mangled symbol).
@@ -152,6 +161,9 @@ def main():
         rs.append(f"        gp: Segment {{ size: {j['gp_size']}, align: {j['gp_align']}, init: &GP_INIT }},")
         rs.append(f"        bulk: Segment {{ size: {j['bulk_size']}, align: {j['bulk_align']}, init: &BULK_INIT }},")
         rs.append(f"        bulk_slots: {j['bulk_slots']},")
+        for k in ("init", "poll"):
+            f = f"{name}_{k}"
+            rs.append(f"        {k}: {'Some(' + str(e[f][1]) + ')' if f in funcs else 'None'},")
         rs.append("        data_relocs: &DATA_RELOCS,")
         rs.append("        imports: &IMPORTS,")
         rs.append("        exports: &EXPORTS,")

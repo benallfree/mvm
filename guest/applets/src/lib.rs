@@ -16,6 +16,8 @@ use mvm_abi::manifest;
 
 /// Round 7c applets (D, E): bulk statics.
 pub mod bulk;
+/// Round 7d applets (F, T1, T2, R, S, X, L): async tasks.
+pub mod tasks;
 
 /// One import: 16 bytes (name hash, then the full name's address and length,
 /// so the kernel can check the hash and the name it resolves to).

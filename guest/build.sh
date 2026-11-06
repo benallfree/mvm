@@ -9,7 +9,11 @@
 #   CODE_MODEL=small|medium  medium switches to PC-relative addressing (auipc pairs)
 #                          and turns off LLVM's GlobalMerge (round 7c): it merges
 #                          small internal statics into one blob, which would stop
-#                          the chunker placing each static on its own
+#                          the chunker placing each static on its own, and turns
+#                          off jump tables (round 7d): a jump table is a table of
+#                          absolute code addresses in .rodata, which flash can't
+#                          hold position-independently (async state machines'
+#                          `match` compiled to one and jumped to an image offset)
 #   BUILD_STD=1            rebuild core/compiler_builtins with these same flags
 #                          (the shipped core is built with relaxation on)
 #   LTO=fat                measurement only: build PKG as a fat-LTO staticlib
@@ -23,7 +27,7 @@ STD=()
 TAG="$PKG-$CODE_MODEL"
 if [ "${BUILD_STD:-0}" = 1 ]; then STD=(-Zbuild-std=core); TAG="$TAG-std"; fi
 export RUSTFLAGS="-C target-feature=-relax -C codegen-units=1 -Z function-sections=yes -C code-model=${CODE_MODEL}"
-if [ "$CODE_MODEL" = medium ]; then RUSTFLAGS="$RUSTFLAGS -C llvm-args=-riscv-enable-global-merge=false"; fi
+if [ "$CODE_MODEL" = medium ]; then RUSTFLAGS="$RUSTFLAGS -C llvm-args=-riscv-enable-global-merge=false -C jump-tables=no"; fi
 export CARGO_TARGET_DIR="target/$TAG-lto$LTO"
 # Inputs come from cargo's own artifact list, not from globbing the target
 # dir: a crate whose build hash changed leaves its old outputs behind, and a

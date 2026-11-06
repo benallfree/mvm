@@ -13,6 +13,8 @@ use core::ptr::addr_of_mut;
 use interp::fast;
 use mvm_kernel::{bulk_slots, fnv1a64, fnv1a64_bytes, Console, Error, Kernel, Manifest, Segment, MAX_DEPTH};
 
+pub mod asynct;
+
 #[allow(dead_code)]
 mod img {
     include!("../../guest-image/applets.rs");
@@ -134,7 +136,7 @@ const RAM_SIZE: usize = 56 * 1024;
 const STACK_SIZE: u32 = 8 * 1024;
 static mut RAM: [u8; RAM_SIZE] = [0; RAM_SIZE];
 /// Decode tables for every loaded flash image (one entry per 2 bytes of image).
-const TABLES: usize = 6144;
+const TABLES: usize = 8192;
 static mut TABLE: [fast::E; TABLES] = [fast::E::EMPTY; TABLES];
 
 const H: u8 = 0;
@@ -176,7 +178,7 @@ pub fn run_all<W: Write>(
     cap_take();
     mute(false);
     let (ram, table) = unsafe { (&mut *addr_of_mut!(RAM), &mut *addr_of_mut!(TABLE)) };
-    let k = match Kernel::new(ram, STACK_SIZE, table, &mut tee, now) {
+    let k = match Kernel::new(ram, STACK_SIZE, table, &mut tee, now, &asynct::IO) {
         Ok(k) => k,
         Err(e) => {
             let _ = writeln!(tee.out, "MO {chip} init pass=0 {e:?}");

@@ -11,6 +11,7 @@ name = "applets"
 version = "0.1.0"
 dependencies = [
  "mvm-abi",
+ "mvm-rt",
 ]
 
 [[package]]
@@ -24,6 +25,13 @@ version = "0.1.0"
 [[package]]
 name = "mvm-abi"
 version = "0.1.0"
+
+[[package]]
+name = "mvm-rt"
+version = "0.1.0"
+dependencies = [
+ "mvm-abi",
+]
 
 [[package]]
 name = "testcrate"

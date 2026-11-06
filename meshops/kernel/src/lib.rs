@@ -19,6 +19,11 @@
 //! bulk segment of any size reached through bulk slots in the window. See
 //! BULK.md.
 
+pub mod drivers;
+pub mod exec;
+pub mod io;
+
+pub use exec::{ExecStats, TState, TicketSlot, DEFAULT_BUDGET, MAX_TICKETS, NO_TASK};
 use interp::fast::{self, Cpu, Stop};
 use interp::{Fault, Mem, Region};
 use mvm_abi::{call, names, BULK_BIAS, BULK_PAGE, GP_WINDOW};
@@ -123,6 +128,10 @@ pub struct Manifest<'a> {
     pub bulk: Segment<'a>,
     /// Number of bulk slots at the start of the gp window.
     pub bulk_slots: u32,
+    /// Round 7d: offsets of the `init()` and `poll(task)` exports of an async
+    /// applet (`None` for a plain one).
+    pub init: Option<u32>,
+    pub poll: Option<u32>,
     pub data_relocs: &'a [DataReloc],
     pub imports: &'a [Import<'a>],
     pub exports: &'a [Export<'a>],
@@ -253,6 +262,13 @@ pub struct Applet {
     /// Import slot -> registry entry.
     pub slots: [u16; MAX_SLOTS],
     pub nslots: u8,
+    /// Round 7d: `poll` export offset (`u32::MAX`: not an async applet).
+    pub poll: u32,
+    /// Tasks spawned and not finished; tasks to poll in the next batch (bit = task id).
+    pub spawned: u8,
+    pub ready: u8,
+    /// Stopped by the kernel (budget or fault): never polled or called again.
+    pub faulted: bool,
 }
 
 /// A flash image loaded once (shared by every instance of that applet).
@@ -292,6 +308,12 @@ pub enum Error {
     BadSlot(u32),
     /// Memory outside guest RAM or any loaded flash image.
     BadPointer(u32),
+    /// Round 7d: an `init`/`poll` ran out of its instruction budget.
+    Budget,
+    /// `poll` returned something other than Pending or Done.
+    BadPollResult(u32),
+    /// The applet was stopped by the kernel earlier.
+    Faulted(u8),
     Fault(Fault),
 }
 
@@ -345,6 +367,11 @@ pub struct Kernel<'a> {
     /// Guest instructions run (only with the `count` feature).
     #[cfg(feature = "count")]
     pub steps: u64,
+    /// Round 7d: the rings shared with the drivers.
+    pub io: &'a io::Io,
+    pub(crate) x: exec::ExecState,
+    /// Budget for each `init`/`poll` call, in control transfers.
+    pub budget: u32,
 }
 
 fn op_uart_write(k: &mut Kernel, a: [u32; 6]) -> Result<[u32; 2], Error> {
@@ -408,6 +435,7 @@ impl<'a> Kernel<'a> {
         tables: &'a mut [fast::E],
         console: &'a mut dyn Console,
         now: fn() -> u32,
+        io: &'a io::Io,
     ) -> Result<Self, Error> {
         let ram_base = addr_of(ram, HOST_RAM_BASE);
         let mut k = Kernel {
@@ -430,13 +458,23 @@ impl<'a> Kernel<'a> {
             max_depth_seen: 0,
             #[cfg(feature = "count")]
             steps: 0,
+            io,
+            x: exec::ExecState::new(),
+            budget: DEFAULT_BUDGET,
         };
-        let ops: [(&'static str, NativeFn); 5] = [
+        let ops: [(&'static str, NativeFn); 12] = [
             (names::UART_WRITE, op_uart_write),
             (names::TIMER_NOW, op_timer_now),
             (names::NOP, op_nop),
             (names::MEM_OWNER, op_mem_owner),
             (names::MEM_SUM, op_mem_sum),
+            (names::TIMER_START, exec::op_timer_start),
+            (names::TICKET_CHECK, exec::op_ticket_check),
+            (names::TICKET_CANCEL, exec::op_ticket_cancel),
+            (names::TASK_SPAWN, exec::op_task_spawn),
+            (names::RADIO_SEND, exec::op_radio_send),
+            (names::RADIO_RECV, exec::op_radio_recv),
+            (names::GPIO_WAIT, exec::op_gpio_wait),
         ];
         for (name, f) in ops {
             k.registry.register(
@@ -468,6 +506,13 @@ impl<'a> Kernel<'a> {
     /// Guest memory as host bytes: RAM or a loaded flash image. Pointers pass straight through.
     pub fn guest_bytes(&self, ptr: u32, len: u32) -> Option<&[u8]> {
         guest_bytes_in(self.ram, self.ram_base, &self.views[..self.nviews], ptr, len)
+    }
+
+    /// Writable guest RAM at `ptr..ptr+len` (never flash).
+    pub fn guest_bytes_mut(&mut self, ptr: u32, len: u32) -> Option<&mut [u8]> {
+        let (p, l) = (ptr as usize, len as usize);
+        let r = p.wrapping_sub(self.ram_base as usize);
+        (r <= self.ram.len() && l <= self.ram.len() - r).then(|| &mut self.ram[r..r + l])
     }
 
     /// The applet whose gp window or bulk segment holds `ptr`.
@@ -655,16 +700,35 @@ impl<'a> Kernel<'a> {
             bulk_len: m.bulk.size,
             slots: [u16::MAX; MAX_SLOTS],
             nslots: m.imports.len() as u8,
+            poll: m.poll.unwrap_or(u32::MAX),
+            spawned: 0,
+            ready: 0,
+            faulted: false,
         };
         for (k, i) in m.imports.iter().enumerate() {
             a.slots[k] = self.registry.resolve(i.hash, i.name.as_bytes())?;
         }
         self.applets[id as usize] = Some(a);
+        // Round 7d: an async applet's init() runs once, under the budget. It
+        // creates its tasks (kernel.task.spawn.v1) and returns.
+        if let Some(init) = m.init {
+            let budget = self.budget;
+            if let Err(e) = self.call_budgeted(id, init, &[], budget) {
+                self.fault(id);
+                return Err(e);
+            }
+        }
         Ok(())
     }
 
     /// Run applet `applet`'s code at offset `entry` of its image, servicing its mesh ops.
+    /// Host calls are not budgeted (the round-7 cost loops run for millions
+    /// of instructions); `init` and `poll` are (see [`Kernel::call_budgeted`]).
     pub fn call(&mut self, applet: u8, entry: u32, args: &[u32]) -> Result<u32, Error> {
+        self.call_budgeted(applet, entry, args, u32::MAX)
+    }
+
+    fn call_inner(&mut self, applet: u8, entry: u32, args: &[u32]) -> Result<u32, Error> {
         let at = self
             .code_addr(applet, entry)
             .ok_or(Error::BadAppletId(applet))?;
@@ -729,12 +793,43 @@ impl<'a> Kernel<'a> {
             .copied()
             .flatten()
             .ok_or(Error::BadAppletId(applet))?;
+        if a.faulted {
+            return Err(Error::Faulted(applet));
+        }
+        self.x.stats.guest_calls += 1;
+        if depth == 0 {
+            self.io.guest_running.store(true, core::sync::atomic::Ordering::Release);
+        }
+        let r = self.run_guest_inner(applet, a, entry, args, depth, sp);
+        if depth == 0 {
+            self.io.guest_running.store(false, core::sync::atomic::Ordering::Release);
+        }
+        r
+    }
+
+    fn run_guest_inner(
+        &mut self,
+        applet: u8,
+        a: Applet,
+        entry: u32,
+        args: &[u32],
+        depth: usize,
+        sp: u32,
+    ) -> Result<u32, Error> {
         let mut r = a.region as usize;
         self.with_cpu(r, depth, |cpu, mem, table| {
             cpu.start(mem, table.len(), entry, args, sp, a.gp)
         })??;
         loop {
-            match self.with_cpu(r, depth, |cpu, mem, table| cpu.run(mem, table))?? {
+            let budget = self.x.budget_left;
+            let stop = self.with_cpu(r, depth, |cpu, mem, table| {
+                cpu.budget = budget;
+                let s = cpu.run(mem, table);
+                (s, cpu.budget)
+            })?;
+            self.x.budget_left = stop.1;
+            match stop.0? {
+                Stop::Budget => return Err(Error::Budget),
                 Stop::Returned(v) => {
                     #[cfg(feature = "count")]
                     {
@@ -759,6 +854,8 @@ impl<'a> Kernel<'a> {
                     args.copy_from_slice(&x[call::REG_ARG0..call::REG_ARG0 + call::NUM_ARGS]);
                     // A guest provider continues on this caller's stack.
                     let caller_sp = x[2] & !15;
+                    // Native ops see who called (ticket ownership).
+                    self.x.caller = applet;
                     let res = self.dispatch(a.slots[slot as usize], args, depth, caller_sp)?;
                     let x = &mut self.cpus[depth].x;
                     x[call::REG_RET0] = res[0];
