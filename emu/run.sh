@@ -40,7 +40,7 @@ rm -f "$OUT/esp32s3.uart"
   -drive file="$OUT/esp32s3-flash.bin",if=mtd,format=raw \
   -serial file:"$OUT/esp32s3.uart" -monitor none -no-reboot > "$OUT/esp32s3.qemu.log" 2>&1 &
 QPID=$!
-for _ in $(seq 1 60); do grep -q 'MVM esp32s3 done' "$OUT/esp32s3.uart" 2>/dev/null && break; sleep 0.5; done
+for _ in $(seq 1 240); do grep -q 'MO esp32s3 done' "$OUT/esp32s3.uart" 2>/dev/null && break; sleep 0.5; done
 kill $QPID 2>/dev/null; wait $QPID 2>/dev/null
 
 echo
@@ -59,5 +59,19 @@ for chip in nrf52840 esp32s3; do
 done
 echo
 echo "cycles: emulator counts, not cycle-accurate (sanity check only)"
+
+# Round seven: mesh-op tests (same shared runner on both chips).
+echo
+printf '%-9s %-18s %-5s %s\n' chip test ok detail
+for chip in nrf52840 esp32s3; do
+  for t in load 1-hello 2-timer 3-nop-cost 4-applet-op 5-nested 6-missing-import 7-swap done; do
+    line=$(grep -a "^MO $chip $t " "$OUT/$chip.uart" 2>/dev/null | head -1)
+    if [ -z "$line" ]; then printf '%-9s %-18s %-5s\n' $chip $t FAIL; fail=1; continue; fi
+    ok=FAIL; grep -q ' pass=1' <<<"$line" && ok=PASS
+    [ $ok = PASS ] || fail=1
+    detail=$(sed "s/^MO $chip $t pass=[01] *//" <<<"$line" | cut -c1-70)
+    printf '%-9s %-18s %-5s %s\n' $chip $t $ok "$detail"
+  done
+done
 [ $fail = 0 ] && echo "ALL PASS" || echo "FAILURES"
 exit $fail

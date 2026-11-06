@@ -12,6 +12,9 @@
 //! - **Operands are read inside the arms that need them**, not up front for every op.
 //! - **Specialised forms:** `li`, `mv`, branch-against-zero (`beqz`/`bnez`), and `lui`/`auipc` fold to `li`.
 //! - Writes to x0 are removed at decode time, as in `pd`.
+//! - Round seven: `ecall` stops the loop ([`Stop::Ecall`]) so the host can
+//!   service a mesh op and resume; `start`/`run` replace the one-shot `call`
+//!   for hosts that offer ops (`call` remains, and treats `ecall` as a fault).
 
 use crate::*;
 
@@ -68,6 +71,8 @@ pub enum Op {
     Divu,
     Rem,
     Remu,
+    /// `ecall`: stop and hand the call to the host (round seven, mesh ops).
+    Ecall,
 }
 
 /// One decoded instruction, 8 bytes. The table has one per 2 bytes of image.
@@ -236,6 +241,7 @@ fn decode(mem: &Mem, table: &mut [E], ip: usize) -> Result<(), Fault> {
             }
         }
         0x0f => e.op = Nop,
+        0x73 if ins == 0x0000_0073 => e.op = Ecall,
         _ => {}
     }
     // Writes to x0: ALU results are dropped; links and loads go to scratch x[32].
@@ -257,9 +263,22 @@ fn decode(mem: &Mem, table: &mut [E], ip: usize) -> Result<(), Fault> {
     Ok(())
 }
 
+/// Why [`Cpu::run`] stopped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stop {
+    /// The guest returned to the exit address; this is `a0`.
+    Returned(u32),
+    /// The guest executed `ecall`. The host reads the request from the
+    /// registers, writes the result to `a0`/`a1`, and calls `run` again to
+    /// continue after the `ecall`.
+    Ecall,
+}
+
 pub struct Cpu {
     /// x0..x31, then x[32] as a sink for writes to x0 (64 slots: `& 63` indexing).
     pub x: [u32; 64],
+    /// Where `run` continues (a table slot index).
+    ip: usize,
     #[cfg(feature = "count")]
     pub steps: u64,
 }
@@ -274,13 +293,16 @@ impl Cpu {
     pub const fn new() -> Self {
         Cpu {
             x: [0; 64],
+            ip: 0,
             #[cfg(feature = "count")]
             steps: 0,
         }
     }
 
-    /// Call the guest function at `entry`. `table` must have exactly
-    /// `image.len() / 2` entries, all `EMPTY` or filled by earlier calls.
+    /// Call the guest function at `entry` with the stack at the top of RAM.
+    /// `table` must have exactly `image.len() / 2` entries, all `EMPTY` or
+    /// filled by earlier calls. An `ecall` is a fault here; hosts that offer
+    /// calls use [`Cpu::start`] and [`Cpu::run`].
     #[inline(never)]
     pub fn call(
         &mut self,
@@ -289,10 +311,50 @@ impl Cpu {
         entry: u32,
         args: &[u32],
     ) -> Result<u32, Fault> {
+        let sp = (mem.ram_base.wrapping_add(mem.ram.len() as u32)) & !15;
+        self.start(mem, table.len(), entry, args, sp)?;
+        match self.run(mem, table)? {
+            Stop::Returned(v) => Ok(v),
+            Stop::Ecall => Err(Fault::Illegal(
+                mem.image_base.wrapping_add(2 * self.ip as u32),
+            )),
+        }
+    }
+
+    /// Set up a call to `entry` with up to 8 arguments and stack pointer `sp`.
+    pub fn start(
+        &mut self,
+        mem: &Mem,
+        table_len: usize,
+        entry: u32,
+        args: &[u32],
+        sp: u32,
+    ) -> Result<(), Fault> {
+        if table_len != mem.image.len() / 2 {
+            return Err(Fault::Fetch(entry));
+        }
+        let off = entry.wrapping_sub(mem.image_base);
+        if off & 1 != 0 || (off >> 1) as usize >= table_len {
+            return Err(Fault::Fetch(entry));
+        }
+        self.x = [0; 64];
+        self.x[1] = EXIT;
+        self.x[2] = sp & !15;
+        for (i, a) in args.iter().take(8).enumerate() {
+            self.x[10 + i] = *a;
+        }
+        self.ip = (off >> 1) as usize;
+        Ok(())
+    }
+
+    /// Run from where `start` or the last `ecall` left off until the guest
+    /// returns or executes `ecall`.
+    #[inline(never)]
+    pub fn run(&mut self, mem: &mut Mem, table: &mut [E]) -> Result<Stop, Fault> {
         let n = table.len();
         let base = mem.image_base;
-        if n != mem.image.len() / 2 {
-            return Err(Fault::Fetch(entry));
+        if n != mem.image.len() / 2 || self.ip >= n {
+            return Err(Fault::Fetch(base.wrapping_add(2 * self.ip as u32)));
         }
         let to_slot = |t: u32| -> Result<usize, Fault> {
             let off = t.wrapping_sub(base);
@@ -302,13 +364,7 @@ impl Cpu {
                 Err(Fault::Fetch(t))
             }
         };
-        self.x = [0; 64];
-        self.x[1] = EXIT;
-        self.x[2] = (mem.ram_base.wrapping_add(mem.ram.len() as u32)) & !15;
-        for (i, a) in args.iter().take(8).enumerate() {
-            self.x[10 + i] = *a;
-        }
-        let mut ip = to_slot(entry)?;
+        let mut ip = self.ip;
         let x = &mut self.x;
         loop {
             #[cfg(feature = "count")]
@@ -387,7 +443,7 @@ impl Cpu {
                     let t = x[r1].wrapping_add(e.imm as u32) & !1;
                     x[rd] = base.wrapping_add(2 * next as u32);
                     if t == EXIT {
-                        return Ok(x[10]);
+                        return Ok(Stop::Returned(x[10]));
                     }
                     ip = to_slot(t)?;
                 }
@@ -434,6 +490,11 @@ impl Cpu {
                 Op::Divu => alur!(|a, b| alu(5, false, true, a, b)),
                 Op::Rem => alur!(|a, b| alu(6, false, true, a, b)),
                 Op::Remu => alur!(|a, b| alu(7, false, true, a, b)),
+                Op::Ecall => {
+                    // Decode proved `next` is in range (ecall can fall through).
+                    self.ip = next;
+                    return Ok(Stop::Ecall);
+                }
                 Op::Illegal => return Err(Fault::Illegal(base.wrapping_add(2 * ip as u32))),
             }
         }

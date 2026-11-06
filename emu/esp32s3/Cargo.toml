@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 bench-core = { path = "../bench-core" }
+mvm-meshops-tests = { path = "../../meshops/tests" }
 esp-bootloader-esp-idf = { version = "0.4", features = ["esp32s3"] }
 # esp-hal is pinned to 1.0.0: from 1.1 its ESP32-S3 PLL bring-up waits on a
 # BBPLL calibration bit that Espressif's QEMU never sets (see emu/RESULTS.md).

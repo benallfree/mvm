@@ -907,6 +907,22 @@ dependencies = [
  "esp-bootloader-esp-idf",
  "esp-hal",
  "esp-println",
+ "mvm-meshops-tests",
+]
+
+[[package]]
+name = "mvm-kernel"
+version = "0.1.0"
+dependencies = [
+ "interp",
+]
+
+[[package]]
+name = "mvm-meshops-tests"
+version = "0.1.0"
+dependencies = [
+ "interp",
+ "mvm-kernel",
 ]
 
 [[package]]

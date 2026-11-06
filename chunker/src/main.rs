@@ -13,7 +13,7 @@ const USAGE: &str = "usage:
   chunker roundtrip <objects/rlibs...>   link spike_entry/spike_entry2, run them in the emulator, compare to native
   chunker names     <objects/rlibs...>   stable-name counts per crate; 8-byte name / 16-byte chunk hash collisions
   chunker manifest  --entry E [--entry E2] [--label L] <objects/rlibs...>   manifest size in three encodings
-  chunker link      --entry E [--entry E2] -o OUT <objects/rlibs...>   flat image at 0x1000: OUT.bin + OUT.rs
+  chunker link      --entry E [--entry E2] [--base HEX] -o OUT <objects/rlibs...>   flat image (default base 0x1000): OUT.bin + OUT.rs
   chunker compare   --entry E <build A inputs...> -- <build B inputs...>    size and shared hashes, A vs B";
 
 fn load(paths: &[String]) -> Result<Store, String> {
@@ -251,8 +251,7 @@ fn applet_roundtrip(store: &Store) -> Result<(), String> {
 
 /// Link the entries into one flat image at `base`. Writes `<out>.bin` and
 /// `<out>.rs` (base, entry addresses, and an include of the image).
-fn link_out(store: &Store, entries: &[String], out: &str) -> Result<(), String> {
-    let base = 0x1000u32;
+fn link_out(store: &Store, entries: &[String], out: &str, base: u32) -> Result<(), String> {
     let roots: Vec<usize> = entries
         .iter()
         .map(|e| store.by_name.get(e).copied().ok_or(format!("no entry {e}")))
@@ -298,12 +297,17 @@ fn main() {
     };
     let (mut entries, mut label, mut inputs) = (Vec::new(), String::from("build"), Vec::new());
     let mut out = String::from("image");
+    let mut base = 0x1000u32;
     let mut it = rest.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--entry" => entries.push(it.next().expect("--entry needs a value").clone()),
             "--label" => label = it.next().expect("--label needs a value").clone(),
             "-o" => out = it.next().expect("-o needs a value").clone(),
+            "--base" => {
+                let v = it.next().expect("--base needs a value");
+                base = u32::from_str_radix(v.trim_start_matches("0x"), 16).expect("--base is hex")
+            }
             _ => inputs.push(a.clone()),
         }
     }
@@ -323,7 +327,7 @@ fn main() {
     }
     let res = load(&inputs).and_then(|mut store| match cmd {
         "names" => report::names(&mut store),
-        "link" => link_out(&store, &entries, &out),
+        "link" => link_out(&store, &entries, &out, base),
         "applet-roundtrip" => applet_roundtrip(&store),
         "manifest" => report::manifest(&mut store, &label, &entries),
         "dump" => {

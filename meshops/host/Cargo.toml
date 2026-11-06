@@ -1,0 +1,9 @@
+[package]
+name = "mvm-meshops-host"
+version = "0.1.0"
+edition = "2021"
+
+# Round seven on the x86 host: runs the shared tests with stdout as the
+# console, and counts guest instructions per section for the report.
+[dependencies]
+mvm-meshops-tests = { path = "../tests", features = ["count"] }

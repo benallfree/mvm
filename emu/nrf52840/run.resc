@@ -6,5 +6,5 @@ machine LoadPlatformDescription @platforms/cpus/nrf52840.repl
 machine LoadPlatformDescriptionFromString "dwt: Miscellaneous.DWT @ sysbus 0xE0001000 { frequency: 64000000 }"
 sysbus LoadELF $elf
 uart0 CreateFileBackend $uartlog true
-emulation RunFor "3"
+emulation RunFor "10"
 quit

@@ -14,11 +14,52 @@ pub unsafe extern "C" fn crc16(ptr: *const u8, len: usize) -> u32 {
     for &b in data {
         crc ^= (b as u16) << 8;
         for _ in 0..8 {
-            crc = if crc & 0x8000 != 0 { (crc << 1) ^ 0x1021 } else { crc << 1 };
+            crc = if crc & 0x8000 != 0 {
+                (crc << 1) ^ 0x1021
+            } else {
+                crc << 1
+            };
         }
     }
     crc as u32
 }
+
+/// CRC-16/CCITT-FALSE, table-driven: the algorithm LLVM derives from `crc16`
+/// on Thumb and RV32. Used as the native baseline where the compiler doesn't
+/// do that itself (the Xtensa toolchain builds `crc16` as the bitwise loop).
+///
+/// # Safety
+/// `ptr` must be valid for `len` bytes.
+#[no_mangle]
+#[inline(never)]
+pub unsafe extern "C" fn crc16_table(ptr: *const u8, len: usize) -> u32 {
+    let data = core::slice::from_raw_parts(ptr, len);
+    let mut crc: u16 = 0xFFFF;
+    for &b in data {
+        crc = (crc << 8) ^ CRC_TABLE[((crc >> 8) as u8 ^ b) as usize];
+    }
+    crc as u32
+}
+
+static CRC_TABLE: [u16; 256] = {
+    let mut t = [0u16; 256];
+    let mut i = 0;
+    while i < 256 {
+        let mut c = (i as u16) << 8;
+        let mut k = 0;
+        while k < 8 {
+            c = if c & 0x8000 != 0 {
+                (c << 1) ^ 0x1021
+            } else {
+                c << 1
+            };
+            k += 1;
+        }
+        t[i] = c;
+        i += 1;
+    }
+    t
+};
 
 /// Packet parse. Header `ver:u8 type:u8 len:u16le seq:u32le`, then TLV records
 /// `t:u8 l:u8 v[l]` filling `len` bytes, then a checksum byte (sum of the body).
@@ -102,7 +143,7 @@ pub mod inputs {
         p[5] = 0x56;
         p[6] = 0x34;
         p[7] = 0x12; // seq
-        // TLVs: lengths 7, 9, 3, 12, 6, 6 -> 6*2 + 43 = 55 bytes
+                     // TLVs: lengths 7, 9, 3, 12, 6, 6 -> 6*2 + 43 = 55 bytes
         let lens = [7u8, 9, 3, 12, 6, 6];
         let mut at = 8;
         let mut k = 0;
@@ -140,6 +181,11 @@ mod tests {
     #[test]
     fn crc_check_value() {
         assert_eq!(unsafe { crc16(b"123456789".as_ptr(), 9) }, 0x29B1);
+        assert_eq!(unsafe { crc16_table(b"123456789".as_ptr(), 9) }, 0x29B1);
+        let d = inputs::CRC_DATA;
+        assert_eq!(unsafe { crc16_table(d.as_ptr(), 256) }, unsafe {
+            crc16(d.as_ptr(), 256)
+        });
     }
 
     #[test]

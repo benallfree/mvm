@@ -1,0 +1,22 @@
+[package]
+name = "mvm-meshops-fw-unicorn"
+version = "0.1.0"
+edition = "2021"
+
+# Round seven under Unicorn: the shared tests as a Thumb image the harness
+# calls directly (no vector table; same memory map as bench/fw).
+[[bin]]
+name = "fw"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+mvm-meshops-tests = { path = "../tests" }
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "off"
+panic = "abort"
+debug = "line-tables-only"

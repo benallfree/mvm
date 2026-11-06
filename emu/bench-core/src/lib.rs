@@ -26,11 +26,36 @@ pub struct Case {
 }
 
 pub const CASES: [Case; 5] = [
-    Case { name: "crc16", crc: true, len: 256, bad_sum: false },
-    Case { name: "crc16-check", crc: true, len: 9, bad_sum: false },
-    Case { name: "parse", crc: false, len: 64, bad_sum: false },
-    Case { name: "parse-bad-sum", crc: false, len: 64, bad_sum: true },
-    Case { name: "parse-short", crc: false, len: 20, bad_sum: false },
+    Case {
+        name: "crc16",
+        crc: true,
+        len: 256,
+        bad_sum: false,
+    },
+    Case {
+        name: "crc16-check",
+        crc: true,
+        len: 9,
+        bad_sum: false,
+    },
+    Case {
+        name: "parse",
+        crc: false,
+        len: 64,
+        bad_sum: false,
+    },
+    Case {
+        name: "parse-bad-sum",
+        crc: false,
+        len: 64,
+        bad_sum: true,
+    },
+    Case {
+        name: "parse-short",
+        crc: false,
+        len: 20,
+        bad_sum: false,
+    },
 ];
 
 /// The input bytes for a case (also used on the host for the expected values).
@@ -49,6 +74,20 @@ pub fn input(c: &Case, buf: &mut [u8; 256]) {
     }
 }
 
+/// The native CRC baseline: the same table-driven algorithm the guest image
+/// runs. Thumb's compiler derives it from the bitwise `crc16`; the Xtensa
+/// toolchain doesn't, so ESP32-S3 uses the explicit table version (round 7).
+unsafe fn native_crc16(p: *const u8, len: usize) -> u32 {
+    #[cfg(target_arch = "xtensa")]
+    {
+        kernels::crc16_table(p, len)
+    }
+    #[cfg(not(target_arch = "xtensa"))]
+    {
+        kernels::crc16(p, len)
+    }
+}
+
 /// Run every case; returns true if all matched native.
 pub fn run_all(chip: &str, cycles: impl Fn() -> u32, out: &mut impl Write) -> bool {
     let mut gram = [0u8; 4096];
@@ -62,7 +101,12 @@ pub fn run_all(chip: &str, cycles: impl Fn() -> u32, out: &mut impl Write) -> bo
 
         // Warm the decode table once, then time a warm run (as in round five).
         let mut cpu = fast::Cpu::new();
-        let mut mem = Mem { image: &img::IMAGE, image_base: img::BASE, ram: &mut gram, ram_base: GUEST_RAM };
+        let mut mem = Mem {
+            image: &img::IMAGE,
+            image_base: img::BASE,
+            ram: &mut gram,
+            ram_base: GUEST_RAM,
+        };
         let _ = cpu.call(&mut mem, &mut table, entry, &[GUEST_RAM, c.len as u32]);
         let t0 = cycles();
         let got = cpu.call(&mut mem, &mut table, entry, &[GUEST_RAM, c.len as u32]);
@@ -71,7 +115,7 @@ pub fn run_all(chip: &str, cycles: impl Fn() -> u32, out: &mut impl Write) -> bo
         let n0 = cycles();
         let want = unsafe {
             if c.crc {
-                kernels::crc16(core::hint::black_box(buf.as_ptr()), c.len)
+                native_crc16(core::hint::black_box(buf.as_ptr()), c.len)
             } else {
                 kernels::parse(core::hint::black_box(buf.as_ptr()), c.len)
             }

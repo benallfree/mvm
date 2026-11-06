@@ -20,6 +20,10 @@ interpreter at 39x (crc16) and 26x (parse), down from 77x and 51x pre-decoded.
 **Round six** (`spike-emu`) runs that same interpreter, unchanged, on an emulated
 nRF52840 (Renode, Embassy) and an emulated ESP32-S3 (Espressif QEMU, esp-hal).
 `emu/run.sh` runs both, and all 10 checks match native. See `emu/RESULTS.md`.
+**Round seven** (`spike-meshops`) adds mesh ops. Guest code calls named ops with `ecall`,
+and each op is provided by the kernel or by another applet. All 7 tests pass on the x86
+host, under Unicorn, on Renode's nRF52840 and on QEMU's ESP32-S3. See
+[MESHOPS.md](MESHOPS.md) and `meshops/RESULTS.md`.
 
 ## Running it: Docker (stable environment, in or out of the cloud)
 
@@ -57,6 +61,8 @@ toolchains, not the dependency cache.
 | `guest/build.sh` | The builder. It pins the flags, emits `.o`, and prints the chunker inputs. Env: `PKG`, `CODE_MODEL=small\|medium`, `BUILD_STD=1`, and `LTO=fat` (measurement only). |
 | `chunker/` | The host tool. Commands: `dump`, `hashes`, `roundtrip`, `applet-roundtrip`, `names`, `manifest`, `compare`, `link` (writes a flat image and entry addresses to disk) |
 | `guest/kernels` | Speed-spike workloads: `crc16` and `parse` |
+| `meshops/` | Round seven: `kernel` (registry, loader, ecall dispatch), `tests` (shared runner), `host`, `fw-unicorn`, `build_applets.py`, `run.sh` |
+| `guest/applets` | Round-seven test applets (H, A, A2, B, M) |
 | `docker/` | `Dockerfile`, `build.sh`, `run.sh`, `run-all.sh`: the pinned environment |
 | `emu/` | Round six: `bench-core` (shared firmware body), `nrf52840` (Embassy, Renode), `esp32s3` (esp-hal, QEMU), `setup-tools.sh`, `run.sh` |
 | `bench/` | Speed spike: `interp` (no_std simple and pre-decoded RV32IMC interpreters), `aot` (RV32IMC → Thumb-2 translator), `fw` (Thumb firmware for Unicorn), `harness/` (Unicorn and the M4 cost model), `run.sh` |

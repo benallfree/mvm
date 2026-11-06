@@ -1,0 +1,14 @@
+[package]
+name = "mvm-meshops-tests"
+version = "0.1.0"
+edition = "2021"
+
+# Round seven: the mesh-op tests and cost measurements, shared by every
+# target (x86 host, Unicorn, Renode nRF52840, QEMU ESP32-S3).
+[dependencies]
+mvm-kernel = { path = "../kernel" }
+interp = { path = "../../bench/interp" }
+
+[features]
+# Count guest instructions per section (host only; it slows the interpreter).
+count = ["mvm-kernel/count"]

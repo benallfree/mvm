@@ -1,0 +1,12 @@
+[package]
+name = "mvm-kernel"
+version = "0.1.0"
+edition = "2021"
+
+# Round seven: the mesh-op registry, load-time import resolution and the
+# ecall dispatcher. no_std, no allocator, no target-specific code.
+[dependencies]
+interp = { path = "../../bench/interp" }
+
+[features]
+count = ["interp/count"]

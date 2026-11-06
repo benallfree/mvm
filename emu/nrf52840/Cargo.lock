@@ -547,7 +547,23 @@ dependencies = [
  "cortex-m-rt",
  "embassy-executor",
  "embassy-nrf",
+ "mvm-meshops-tests",
  "panic-halt",
+]
+
+[[package]]
+name = "mvm-kernel"
+version = "0.1.0"
+dependencies = [
+ "interp",
+]
+
+[[package]]
+name = "mvm-meshops-tests"
+version = "0.1.0"
+dependencies = [
+ "interp",
+ "mvm-kernel",
 ]
 
 [[package]]

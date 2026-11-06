@@ -18,6 +18,14 @@ fn main() -> ! {
         .with_tx(peripherals.GPIO43);
     let _ = writeln!(uart, "MVM esp32s3 start");
     bench_core::run_all("esp32s3", get_cycle_count, &mut uart);
+    // Round seven: mesh ops. kernel.timer.now.v1 and section timing both read CCOUNT.
+    mvm_meshops_tests::run_all(
+        "esp32s3",
+        &mut uart,
+        get_cycle_count,
+        get_cycle_count,
+        mvm_meshops_tests::N_CALLS,
+    );
     let _ = uart.flush();
     loop {}
 }
