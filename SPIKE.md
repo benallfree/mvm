@@ -61,7 +61,8 @@ toolchains, not the dependency cache.
 | `guest/build.sh` | The builder. It pins the flags, emits `.o`, and prints the chunker inputs. Env: `PKG`, `CODE_MODEL=small\|medium`, `BUILD_STD=1`, and `LTO=fat` (measurement only). |
 | `chunker/` | The host tool. Commands: `dump`, `hashes`, `roundtrip`, `applet-roundtrip`, `names`, `manifest`, `compare`, `link` (writes a flat image and entry addresses to disk) |
 | `guest/kernels` | Speed-spike workloads: `crc16` and `parse` |
-| `meshops/` | Round seven: `kernel` (registry, loader, ecall dispatch), `tests` (shared runner), `host`, `fw-unicorn`, `build_applets.py`, `run.sh` |
+| `abi/` | `mvm-abi`: the guest/kernel contract (FNV-1a 64, call ABI registers, manifest table layouts), used by both sides |
+| `meshops/` | Round seven (one Cargo workspace): `kernel` (registry, loader, ecall dispatch), `tests` (shared runner), `host`, `fw-unicorn`, `build_applets.py`, `run_unicorn.py`, `run.sh` |
 | `guest/applets` | Round-seven test applets (H, A, A2, B, M) |
 | `docker/` | `Dockerfile`, `build.sh`, `run.sh`, `run-all.sh`: the pinned environment |
 | `emu/` | Round six: `bench-core` (shared firmware body), `nrf52840` (Embassy, Renode), `esp32s3` (esp-hal, QEMU), `setup-tools.sh`, `run.sh` |

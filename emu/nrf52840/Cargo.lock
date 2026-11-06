@@ -539,6 +539,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "mvm-abi"
+version = "0.1.0"
+
+[[package]]
 name = "mvm-emu-nrf52840"
 version = "0.1.0"
 dependencies = [
@@ -556,6 +560,7 @@ name = "mvm-kernel"
 version = "0.1.0"
 dependencies = [
  "interp",
+ "mvm-abi",
 ]
 
 [[package]]

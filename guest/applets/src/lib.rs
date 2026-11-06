@@ -2,24 +2,17 @@
 //! Mesh-op test applets (round seven). See MESHOPS.md for the ABI.
 //!
 //! Each applet is a set of `#[no_mangle]` symbols with a prefix:
-//! - `<X>_IMPORTS`: the names it calls, by FNV-1a 64 hash. Slot = index.
-//! - `<X>_EXPORTS`: the ops it provides (name hash + function).
+//! - `<X>_IMPORTS`: the names it calls (hash + full name). Slot = index.
+//! - `<X>_EXPORTS`: the ops it provides (hash + full name + function).
+//!
+//! The table layouts are defined in `mvm-abi` (shared with the kernel); the
+//! structs here are checked against them at compile time.
 //! - functions the tests call directly.
 //!
 //! `chunker link` builds one image per applet from those symbols.
 
-/// FNV-1a 64 over the full versioned name, e.g. `kernel.uart.write.v1`.
-pub const fn fnv1a64(s: &str) -> u64 {
-    let b = s.as_bytes();
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut i = 0;
-    while i < b.len() {
-        h ^= b[i] as u64;
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        i += 1;
-    }
-    h
-}
+pub use mvm_abi::fnv1a64;
+use mvm_abi::manifest;
 
 /// One import: 16 bytes (name hash, then the full name's address and length,
 /// so the kernel can check the hash and the name it resolves to).
@@ -102,6 +95,23 @@ impl<const N: usize> Exports<N> {
     }
 }
 
+// The structs above must match the layouts the kernel reads (RV32: 4-byte pointers).
+#[cfg(target_pointer_width = "32")]
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<Import>() == manifest::import::SIZE);
+    assert!(offset_of!(Import, hash) == manifest::import::HASH);
+    assert!(offset_of!(Import, name) == manifest::import::NAME);
+    assert!(offset_of!(Import, len) == manifest::import::LEN);
+    assert!(size_of::<Export>() == manifest::export::SIZE);
+    assert!(offset_of!(Export, hash) == manifest::export::HASH);
+    assert!(offset_of!(Export, func) == manifest::export::FUNC);
+    assert!(offset_of!(Export, name) == manifest::export::NAME);
+    assert!(offset_of!(Export, len) == manifest::export::LEN);
+    assert!(offset_of!(Imports<1>, entries) == manifest::HEADER_SIZE);
+    assert!(offset_of!(Exports<1>, entries) == manifest::HEADER_SIZE);
+};
+
 /// Call the op in import slot `slot` (the ABI: `ecall`, slot in a7,
 /// arguments in a0..a5, result in a0 and a1).
 #[inline(always)]
@@ -126,9 +136,7 @@ pub fn op(slot: u32, a0: u32, a1: u32, a2: u32) -> u32 {
 }
 
 pub mod names {
-    pub const UART_WRITE: &str = "kernel.uart.write.v1";
-    pub const TIMER_NOW: &str = "kernel.timer.now.v1";
-    pub const NOP: &str = "kernel.nop.v1";
+    pub use mvm_abi::names::{NOP, TIMER_NOW, UART_WRITE};
     pub const ECHO: &str = "test.echo.v1";
     pub const ECHO_LOUD: &str = "test.echo_loud.v1";
     pub const RECURSE: &str = "test.recurse.v1";

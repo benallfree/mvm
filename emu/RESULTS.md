@@ -39,10 +39,13 @@ instructions executed, not cycles. What they confirm:
   Unicorn. The firmware build and the Unicorn harness agree.
 - **ESP32-S3.** Counts are deterministic run to run. Assuming CCOUNT runs at the 80 MHz
   default, the interpreter executes roughly 14–15 Xtensa instructions per guest
-  instruction. The interpreted/native ratio isn't comparable with the nRF's, because
-  the native baselines differ: the Xtensa toolchain compiles crc16 as the literal
-  bitwise loop, about 4,500 instructions, while Thumb gets a 512-byte table CRC,
-  about 1,430. The guest RV32 image uses the table on both chips.
+  instruction.
+- **Superseded in round seven:** in this round's table the S3's CRC ratio isn't
+  comparable with the nRF's, because the native baselines differed. The Xtensa
+  toolchain compiles crc16 as the literal bitwise loop (about 4,500 instructions),
+  while Thumb gets a 512-byte table CRC (about 1,430). Round seven made the S3
+  baseline table-driven (`kernels::crc16_table`, the guest's algorithm): the S3 is
+  now **28.9x** against the nRF's 32.7x (`meshops/RESULTS.md`).
 
 ## Toolchain pain points (Xtensa)
 

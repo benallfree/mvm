@@ -1,5 +1,0 @@
-# Pinned so builds are the same in and out of the Docker image (docker/Dockerfile).
-[toolchain]
-channel = "1.97.0"
-components = ["rustfmt", "clippy"]
-targets = ["thumbv7em-none-eabihf"]

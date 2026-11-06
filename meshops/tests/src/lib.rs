@@ -1,7 +1,7 @@
 #![no_std]
 //! Round-seven mesh-op tests, shared by every target. A target supplies an
 //! output sink, a monotonic tick source (for kernel.timer.now.v1) and a cycle
-//! counter; this loads the applets and runs tests 1-7 plus the cost sections.
+//! counter; this loads the applets and runs tests 1-8 plus the cost sections.
 //!
 //! Lines: `MO <chip> <test> pass=<0|1> <details>` and
 //! `MO <chip> cost <section> n=<N> cycles=<C> [steps=<S>]`, then `MO <chip> done pass=<0|1>`.
@@ -138,6 +138,9 @@ const A2: u8 = 3;
 const B_AGAIN: u8 = 4;
 const M: u8 = 5;
 
+/// A2's test.echo.v1 tags its answer so callers can tell which provider ran.
+const A2_TAG: u32 = 0xA2A2_0000;
+
 /// Default `n` for the call-cost loops (Unicorn uses less: it hooks every instruction).
 pub const N_CALLS: u32 = 10_000;
 const RECURSE_REPS: u32 = 200;
@@ -150,22 +153,12 @@ pub fn run_all<W: Write>(
     cycles: fn() -> u32,
     n_calls: u32,
 ) -> bool {
-    #[allow(non_snake_case)]
-    let N = n_calls;
-    let mut all = true;
-    macro_rules! line {
-        ($($t:tt)*) => {{ let _ = writeln!(out, $($t)*); }};
-    }
-    // The kernel borrows `out` through the console, so results go to a
-    // buffer of lines and are flushed at the end.
-    let mut report = Lines::default();
     let mut tee = Tee { out };
     cap_take();
     mute(false);
     let (ram, table) = unsafe { (&mut *addr_of_mut!(RAM), &mut *addr_of_mut!(TABLE)) };
-
-    let mut k = match Kernel::new(
-        &img::BLOB,
+    let k = match Kernel::new(
+        &img::BLOB.0,
         img::BLOB_BASE,
         ram,
         RAM_BASE,
@@ -179,244 +172,255 @@ pub fn run_all<W: Write>(
             return false;
         }
     };
-    #[cfg(feature = "count")]
-    let steps = |k: &mut Kernel| core::mem::replace(&mut k.steps, 0);
-    #[cfg(not(feature = "count"))]
-    let steps = |_: &mut Kernel| 0u64;
-    let cost = |r: &mut Lines, name: &str, n: u32, c: u32, s: u64| {
-        r.push(format_args!(
-            "MO {chip} cost {name} n={n} cycles={c} steps={s}"
-        ));
+    let mut r = Run {
+        chip,
+        k,
+        report: Lines::default(),
+        cycles,
+        n: n_calls,
+        all: true,
+        cs: checksum(&b_buf()),
     };
+    r.load();
+    r.hello();
+    r.timer();
+    r.kernel_call_costs();
+    r.applet_op();
+    r.nested();
+    r.missing_import();
+    r.swap();
+    r.spoof();
 
-    // Load H, A, B (the order matters only for exports-before-imports).
-    let c0 = cycles();
-    let loads = [
-        k.load(H, img::h::IMPORTS, img::h::EXPORTS),
-        k.load(A, img::a::IMPORTS, img::a::EXPORTS),
-        k.load(B, img::b::IMPORTS, img::b::EXPORTS),
-    ];
-    let c1 = cycles();
-    let loaded = loads.iter().all(|l| l.is_ok());
-    all &= loaded;
-    report.push(format_args!(
-        "MO {chip} load pass={} applets=3 registry_entries={} entry_bytes={} applet_bytes={} registry_bytes={}",
-        loaded as u8,
-        k.registry.len(),
-        core::mem::size_of::<mvm_kernel::Entry>(),
-        core::mem::size_of::<mvm_kernel::Applet>(),
-        core::mem::size_of::<mvm_kernel::Registry>()
-    ));
-    cost(&mut report, "load_all", 3, c1.wrapping_sub(c0), 0);
-
-    // 1. Hello.
-    let r = k.call(H, img::h::HELLO, &[]);
-    let want = b"hello from guest applet H\n";
-    let got = cap_take();
-    let ok = r == Ok(want.len() as u32) && got.as_str().as_bytes() == want;
-    all &= ok;
-    report.push(format_args!(
-        "MO {chip} 1-hello pass={} ret={r:?}",
-        ok as u8
-    ));
-
-    // 2. Timer.
-    let r = k.call(H, img::h::TIMER, &[2000]);
-    let printed = cap_take();
-    let ok = match r {
-        Ok(d) => d > 0 && printed.as_str().trim_end() == fmt_delta(d).as_str(),
-        Err(_) => false,
-    };
-    all &= ok;
-    report.push(format_args!(
-        "MO {chip} 2-timer pass={} delta={r:?}",
-        ok as u8
-    ));
-
-    // 3. Bare call cost (and baselines). Guest output muted for the uart loop.
-    let _ = steps(&mut k);
-    let c0 = cycles();
-    let e = k.call(H, img::h::EMPTY_LOOP, &[N]);
-    let c1 = cycles();
-    cost(
-        &mut report,
-        "empty_loop",
-        N,
-        c1.wrapping_sub(c0),
-        steps(&mut k),
-    );
-    let c0 = cycles();
-    let n = k.call(H, img::h::NOP_LOOP, &[N]);
-    let c1 = cycles();
-    cost(
-        &mut report,
-        "nop_loop",
-        N,
-        c1.wrapping_sub(c0),
-        steps(&mut k),
-    );
-    mute(true);
-    let c0 = cycles();
-    let u = k.call(H, img::h::UART_LOOP, &[N]);
-    let c1 = cycles();
-    mute(false);
-    cost(
-        &mut report,
-        "uart_loop_muted",
-        N,
-        c1.wrapping_sub(c0),
-        steps(&mut k),
-    );
-    let ok = e == Ok(0) && n == Ok(0) && u == Ok(16 * N);
-    all &= ok;
-    report.push(format_args!(
-        "MO {chip} 3-nop-cost pass={} calls={N}",
-        ok as u8
-    ));
-
-    // 4. Applet-provided op: B calls A's test.echo.v1 with its own buffer.
-    let buf = b_buf();
-    let cs = checksum(&buf);
-    let r = k.call(B, img::b::ECHO_ONCE, &[]);
-    let mut ok = r == Ok(cs);
-    for len in [0u32, 64] {
-        let name_l = if len == 0 {
-            "local_loop_len0"
-        } else {
-            "local_loop_len64"
-        };
-        let name_e = if len == 0 {
-            "echo_loop_len0"
-        } else {
-            "echo_loop_len64"
-        };
-        let c0 = cycles();
-        let l = k.call(B, img::b::LOCAL_LOOP, &[N, len]);
-        let c1 = cycles();
-        cost(&mut report, name_l, N, c1.wrapping_sub(c0), steps(&mut k));
-        let c0 = cycles();
-        let x = k.call(B, img::b::ECHO_LOOP, &[N, len]);
-        let c1 = cycles();
-        cost(&mut report, name_e, N, c1.wrapping_sub(c0), steps(&mut k));
-        ok &= l.is_ok() && l == x;
-    }
-    all &= ok;
-    report.push(format_args!(
-        "MO {chip} 4-applet-op pass={} echo={r:?} want={cs:#x}",
-        ok as u8
-    ));
-
-    // 5. Nested: A's op prints through the kernel; recursion through A's op.
-    let r = k.call(B, img::b::LOUD, &[]);
-    let printed = cap_take();
-    let loud_ok = r == Ok(cs) && printed.as_str() == "A echo_loud: 64 bytes\n";
-    k.max_depth_seen = 0;
-    let deepest_ok = MAX_DEPTH as u32 - 2; // B is level 0; A(n) .. A(0) take n+1 more
-    let r_ok = k.call(B, img::b::RECURSE, &[deepest_ok]);
-    let seen = k.max_depth_seen;
-    let r_bad = k.call(B, img::b::RECURSE, &[deepest_ok + 1]);
-    let after = k.call(B, img::b::ECHO_ONCE, &[]);
-    let ok = loud_ok
-        && r_ok == Ok(deepest_ok)
-        && seen == MAX_DEPTH - 1
-        && r_bad == Err(Error::DepthExceeded(MAX_DEPTH))
-        && after == Ok(cs);
-    all &= ok;
-    report.push(format_args!(
-        "MO {chip} 5-nested pass={} loud={r:?} recurse({deepest_ok})={r_ok:?} max_depth={seen} recurse({})={r_bad:?} after={after:?}",
-        ok as u8,
-        deepest_ok + 1
-    ));
-    let _ = steps(&mut k);
-    for (name, d) in [("recurse_depth1", 1u32), ("recurse_depth6", 6)] {
-        let c0 = cycles();
-        for _ in 0..RECURSE_REPS {
-            let _ = k.call(B, img::b::RECURSE, &[d]);
-        }
-        let c1 = cycles();
-        cost(
-            &mut report,
-            name,
-            RECURSE_REPS,
-            c1.wrapping_sub(c0),
-            steps(&mut k),
-        );
-    }
-    // Host -> guest call overhead (Kernel::call of a trivial entry), for context.
-    let c0 = cycles();
-    for _ in 0..RECURSE_REPS {
-        let _ = k.call(H, img::h::EMPTY_LOOP, &[0]);
-    }
-    let c1 = cycles();
-    cost(
-        &mut report,
-        "call_overhead",
-        RECURSE_REPS,
-        c1.wrapping_sub(c0),
-        steps(&mut k),
-    );
-
-    // 6. Missing import: the load fails, names the import, and changes nothing.
-    let before = k.registry.len();
-    let r = k.load(M, img::m::IMPORTS, img::m::EXPORTS);
-    let ok = matches!(r, Err(Error::Unresolved(h)) if h == fnv1a64("test.nobody.v1"))
-        && k.registry.len() == before
-        && k.applets[M as usize].is_none();
-    all &= ok;
-    let missing = match r {
-        Err(Error::Unresolved(h)) => name_of(h),
-        _ => "-",
-    };
-    report.push(format_args!(
-        "MO {chip} 6-missing-import pass={} error=unresolved:{missing}",
-        ok as u8
-    ));
-
-    // 7. Swap provider: A2 registers test.echo.v1 after B resolved it.
-    let before = k.call(B, img::b::ECHO_ONCE, &[]);
-    let l = k.load(A2, img::a2::IMPORTS, img::a2::EXPORTS);
-    let old_binding = k.call(B, img::b::ECHO_ONCE, &[]);
-    let l2 = k.load(B_AGAIN, img::b::IMPORTS, img::b::EXPORTS);
-    let new_binding = k.call(B_AGAIN, img::b::ECHO_ONCE, &[]);
-    let tagged = cs ^ 0xA2A2_0000;
-    let ok = before == Ok(cs)
-        && l.is_ok()
-        && l2.is_ok()
-        && old_binding == Ok(tagged)
-        && new_binding == Ok(tagged);
-    all &= ok;
-    report.push(format_args!(
-        "MO {chip} 7-swap pass={} before={before:?} loaded-before-swap={old_binding:?} loaded-after-swap={new_binding:?}",
-        ok as u8
-    ));
-
-    // 8. Spoofing: a kernel name, and a forged hash/name pair on each side.
-    let before = k.registry.len();
-    let s1 = k.load(M, img::s1::IMPORTS, img::s1::EXPORTS);
-    let s2 = k.load(M, img::s2::IMPORTS, img::s2::EXPORTS);
-    let s3 = k.load(M, img::s3::IMPORTS, img::s3::EXPORTS);
-    let echo = fnv1a64("test.echo.v1");
-    let still = k.call(B, img::b::ECHO_ONCE, &[]);
-    let ok = matches!(s1, Err(Error::ReservedNamespace(h)) if h == fnv1a64("kernel.nop.v1"))
-        && matches!(s2, Err(Error::NameHashMismatch(h)) if h == echo)
-        && matches!(s3, Err(Error::NameHashMismatch(h)) if h == echo)
-        && k.registry.len() == before
-        && k.applets[M as usize].is_none()
-        && still == Ok(cs ^ 0xA2A2_0000);
-    all &= ok;
-    report.push(format_args!(
-        "MO {chip} 8-spoof pass={} kernel-name={} forged-export={} forged-import={}",
-        ok as u8,
-        why(s1.err()).as_str(),
-        why(s2.err()).as_str(),
-        why(s3.err()).as_str()
-    ));
-
+    // The kernel held `out` (through the console) until now.
+    let Run { report, all, .. } = r;
     for l in report.lines() {
         let _ = writeln!(tee.out, "{l}");
     }
-    line!("MO {chip} done pass={}", all as u8);
+    let _ = writeln!(tee.out, "MO {chip} done pass={}", all as u8);
     all
+}
+
+/// One test run: the kernel, the report so far, and the overall result.
+struct Run<'c, 'a> {
+    chip: &'c str,
+    k: Kernel<'a>,
+    /// Report lines, printed once the kernel releases the output sink.
+    report: Lines,
+    cycles: fn() -> u32,
+    /// Calls per cost loop.
+    n: u32,
+    all: bool,
+    /// test.echo.v1's answer for B's buffer (A's provider).
+    cs: u32,
+}
+
+impl<'a> Run<'_, 'a> {
+    /// Record one test: `MO <chip> <test> pass=<0|1> <detail>`.
+    fn check(&mut self, test: &str, ok: bool, detail: core::fmt::Arguments) {
+        self.all &= ok;
+        self.report.push(format_args!(
+            "MO {} {test} pass={} {detail}",
+            self.chip, ok as u8
+        ));
+    }
+
+    /// Guest instructions since the last call (0 without the `count` feature).
+    fn take_steps(&mut self) -> u64 {
+        #[cfg(feature = "count")]
+        return core::mem::replace(&mut self.k.steps, 0);
+        #[cfg(not(feature = "count"))]
+        0
+    }
+
+    /// Time one section: exactly two counter reads around `f`, in
+    /// `SECTIONS` order (the Unicorn harness relies on both).
+    fn timed<R>(&mut self, name: &str, n: u32, f: impl FnOnce(&mut Kernel<'a>) -> R) -> R {
+        self.take_steps();
+        let c0 = (self.cycles)();
+        let r = f(&mut self.k);
+        let c1 = (self.cycles)();
+        let s = self.take_steps();
+        let chip = self.chip;
+        self.report.push(format_args!(
+            "MO {chip} cost {name} n={n} cycles={} steps={s}",
+            c1.wrapping_sub(c0)
+        ));
+        r
+    }
+
+    /// Load H, A, B (the order matters only for exports-before-imports).
+    fn load(&mut self) {
+        let loads = self.timed("load_all", 3, |k| {
+            [
+                k.load(H, img::h::IMPORTS, img::h::EXPORTS),
+                k.load(A, img::a::IMPORTS, img::a::EXPORTS),
+                k.load(B, img::b::IMPORTS, img::b::EXPORTS),
+            ]
+        });
+        let ok = loads.iter().all(|l| l.is_ok());
+        let entries = self.k.registry.len();
+        self.check(
+            "load",
+            ok,
+            format_args!(
+                "applets=3 registry_entries={entries} entry_bytes={} applet_bytes={} registry_bytes={}",
+                core::mem::size_of::<mvm_kernel::Entry>(),
+                core::mem::size_of::<mvm_kernel::Applet>(),
+                core::mem::size_of::<mvm_kernel::Registry>()
+            ),
+        );
+    }
+
+    /// 1. A guest prints through kernel.uart.write.v1.
+    fn hello(&mut self) {
+        let r = self.k.call(H, img::h::HELLO, &[]);
+        let want = b"hello from guest applet H\n";
+        let ok = r == Ok(want.len() as u32) && cap_take().as_str().as_bytes() == want;
+        self.check("1-hello", ok, format_args!("ret={r:?}"));
+    }
+
+    /// 2. A guest reads the timer around a loop and prints the delta.
+    fn timer(&mut self) {
+        let r = self.k.call(H, img::h::TIMER, &[2000]);
+        let printed = cap_take();
+        let ok =
+            matches!(r, Ok(d) if d > 0 && printed.as_str().trim_end() == fmt_delta(d).as_str());
+        self.check("2-timer", ok, format_args!("delta={r:?}"));
+    }
+
+    /// 3. Bare call cost: kernel.nop.v1 and a muted uart write, against an empty loop.
+    fn kernel_call_costs(&mut self) {
+        let n = self.n;
+        let e = self.timed("empty_loop", n, |k| k.call(H, img::h::EMPTY_LOOP, &[n]));
+        let p = self.timed("nop_loop", n, |k| k.call(H, img::h::NOP_LOOP, &[n]));
+        mute(true);
+        let u = self.timed("uart_loop_muted", n, |k| k.call(H, img::h::UART_LOOP, &[n]));
+        mute(false);
+        let ok = e == Ok(0) && p == Ok(0) && u == Ok(16 * n);
+        self.check("3-nop-cost", ok, format_args!("calls={n}"));
+    }
+
+    /// 4. B calls A's test.echo.v1 with a buffer B owns (and the call costs).
+    fn applet_op(&mut self) {
+        let (n, cs) = (self.n, self.cs);
+        let r = self.k.call(B, img::b::ECHO_ONCE, &[]);
+        let mut ok = r == Ok(cs);
+        for (len, local, echo) in [
+            (0u32, "local_loop_len0", "echo_loop_len0"),
+            (64, "local_loop_len64", "echo_loop_len64"),
+        ] {
+            let l = self.timed(local, n, |k| k.call(B, img::b::LOCAL_LOOP, &[n, len]));
+            let x = self.timed(echo, n, |k| k.call(B, img::b::ECHO_LOOP, &[n, len]));
+            ok &= l.is_ok() && l == x;
+        }
+        self.check("4-applet-op", ok, format_args!("echo={r:?} want={cs:#x}"));
+    }
+
+    /// 5. Nested re-entry: A's op prints through the kernel; recursion hits the depth cap.
+    fn nested(&mut self) {
+        let cs = self.cs;
+        let r = self.k.call(B, img::b::LOUD, &[]);
+        let loud_ok = r == Ok(cs) && cap_take().as_str() == "A echo_loud: 64 bytes\n";
+        self.k.max_depth_seen = 0;
+        let deepest_ok = MAX_DEPTH as u32 - 2; // B is level 0; A(n) .. A(0) take n+1 more
+        let r_ok = self.k.call(B, img::b::RECURSE, &[deepest_ok]);
+        let seen = self.k.max_depth_seen;
+        let r_bad = self.k.call(B, img::b::RECURSE, &[deepest_ok + 1]);
+        let after = self.k.call(B, img::b::ECHO_ONCE, &[]);
+        let ok = loud_ok
+            && r_ok == Ok(deepest_ok)
+            && seen == MAX_DEPTH - 1
+            && r_bad == Err(Error::DepthExceeded(MAX_DEPTH))
+            && after == Ok(cs);
+        self.check(
+            "5-nested",
+            ok,
+            format_args!(
+                "loud={r:?} recurse({deepest_ok})={r_ok:?} max_depth={seen} recurse({})={r_bad:?} after={after:?}",
+                deepest_ok + 1
+            ),
+        );
+        for (name, d) in [("recurse_depth1", 1u32), ("recurse_depth6", 6)] {
+            self.timed(name, RECURSE_REPS, |k| {
+                for _ in 0..RECURSE_REPS {
+                    let _ = k.call(B, img::b::RECURSE, &[d]);
+                }
+            });
+        }
+        // Host -> guest call overhead (Kernel::call of a trivial entry), for context.
+        self.timed("call_overhead", RECURSE_REPS, |k| {
+            for _ in 0..RECURSE_REPS {
+                let _ = k.call(H, img::h::EMPTY_LOOP, &[0]);
+            }
+        });
+    }
+
+    /// 6. A missing import fails the load, names the import, and changes nothing.
+    fn missing_import(&mut self) {
+        let before = self.k.registry.len();
+        let r = self.k.load(M, img::m::IMPORTS, img::m::EXPORTS);
+        let ok = matches!(r, Err(Error::Unresolved(h)) if h == fnv1a64("test.nobody.v1"))
+            && self.k.registry.len() == before
+            && self.k.applets[M as usize].is_none();
+        let missing = match r {
+            Err(Error::Unresolved(h)) => name_of(h),
+            _ => "-",
+        };
+        self.check(
+            "6-missing-import",
+            ok,
+            format_args!("error=unresolved:{missing}"),
+        );
+    }
+
+    /// 7. A2 registers test.echo.v1 after B resolved it: old and new callers reach A2.
+    fn swap(&mut self) {
+        let cs = self.cs;
+        let before = self.k.call(B, img::b::ECHO_ONCE, &[]);
+        let l = self.k.load(A2, img::a2::IMPORTS, img::a2::EXPORTS);
+        let old_binding = self.k.call(B, img::b::ECHO_ONCE, &[]);
+        let l2 = self.k.load(B_AGAIN, img::b::IMPORTS, img::b::EXPORTS);
+        let new_binding = self.k.call(B_AGAIN, img::b::ECHO_ONCE, &[]);
+        let tagged = cs ^ A2_TAG;
+        let ok = before == Ok(cs)
+            && l.is_ok()
+            && l2.is_ok()
+            && old_binding == Ok(tagged)
+            && new_binding == Ok(tagged);
+        self.check(
+            "7-swap",
+            ok,
+            format_args!(
+                "before={before:?} loaded-before-swap={old_binding:?} loaded-after-swap={new_binding:?}"
+            ),
+        );
+    }
+
+    /// 8. Spoofing: a kernel name, and a forged hash/name pair on each side.
+    fn spoof(&mut self) {
+        let before = self.k.registry.len();
+        let s1 = self.k.load(M, img::s1::IMPORTS, img::s1::EXPORTS);
+        let s2 = self.k.load(M, img::s2::IMPORTS, img::s2::EXPORTS);
+        let s3 = self.k.load(M, img::s3::IMPORTS, img::s3::EXPORTS);
+        let echo = fnv1a64("test.echo.v1");
+        let still = self.k.call(B, img::b::ECHO_ONCE, &[]);
+        let ok = matches!(s1, Err(Error::ReservedNamespace(h)) if h == fnv1a64("kernel.nop.v1"))
+            && matches!(s2, Err(Error::NameHashMismatch(h)) if h == echo)
+            && matches!(s3, Err(Error::NameHashMismatch(h)) if h == echo)
+            && self.k.registry.len() == before
+            && self.k.applets[M as usize].is_none()
+            && still == Ok(self.cs ^ A2_TAG);
+        self.check(
+            "8-spoof",
+            ok,
+            format_args!(
+                "kernel-name={} forged-export={} forged-import={}",
+                why(s1.err()).as_str(),
+                why(s2.err()).as_str(),
+                why(s3.err()).as_str()
+            ),
+        );
+    }
 }
 
 fn fmt_delta(d: u32) -> Line {

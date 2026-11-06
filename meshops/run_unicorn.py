@@ -14,26 +14,19 @@ import json, os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "bench", "harness"))
 import m4_cost  # noqa: E402
-from run import load_elf  # noqa: E402
-from unicorn import UC_ARCH_ARM, UC_HOOK_CODE, UC_MODE_MCLASS, UC_MODE_THUMB, Uc  # noqa: E402
-from unicorn.arm_const import UC_ARM_REG_CPSR, UC_ARM_REG_LR, UC_ARM_REG_R0, UC_ARM_REG_SP  # noqa: E402
+import thumb  # noqa: E402
+from unicorn import UC_HOOK_CODE  # noqa: E402
 
 SECTIONS = ["load_all", "empty_loop", "nop_loop", "uart_loop_muted", "local_loop_len0", "echo_loop_len0",
             "local_loop_len64", "echo_loop_len64", "recurse_depth1", "recurse_depth6", "call_overhead"]
-RET = 0x1000_0000
-STACK_TOP = 0x2004_0000
+STACK_TOP = thumb.STACK_TOP
 PAINT = 0xA5
 
 
 def main():
     elf, out = sys.argv[1:3]
-    segs, syms, _funcs, code = load_elf(elf)
-    uc = Uc(UC_ARCH_ARM, UC_MODE_THUMB | UC_MODE_MCLASS)
-    uc.mem_map(0x0, 0x10_0000)
-    uc.mem_map(0x2000_0000, 0x4_0000)
-    uc.mem_map(RET, 0x1000)
-    for vaddr, data, memsz in segs:
-        uc.mem_write(vaddr, data + b"\0" * (memsz - len(data)))
+    segs, syms, _funcs, code = thumb.load_elf(elf)
+    uc = thumb.new_unicorn(segs)
     # Paint the stack region to measure the deepest host stack use afterwards.
     bss_end = max(v + m for v, _, m in segs if v >= 0x2000_0000)
     uc.mem_write(bss_end, bytes([PAINT]) * (STACK_TOP - bss_end))
@@ -50,19 +43,13 @@ def main():
             st["cyc"] += m4_cost.cost(i, ok, taken, st["after_ldst"], False)
             st["after_ldst"] = ok and i.cls in ("ld", "st")
         i = code[addr]
-        ok = True
-        if i.conditional and i.cls not in ("bcc", "cb"):
-            ok = m4_cost.cond_passes(i.cc, u.reg_read(UC_ARM_REG_CPSR))
-        st["prev"] = (i, ok)
+        st["prev"] = (i, thumb.executed(i, u))
         st["n"] += 1
         if addr == mark:
             marks.append((st["cyc"], st["n"]))
 
     uc.hook_add(UC_HOOK_CODE, hook)
-    uc.reg_write(UC_ARM_REG_SP, STACK_TOP)
-    uc.reg_write(UC_ARM_REG_LR, RET | 1)
-    uc.emu_start(syms["mo_run"] | 1, RET, count=500_000_000)
-    ok = uc.reg_read(UC_ARM_REG_R0)
+    ok = thumb.call(uc, syms["mo_run"], count=500_000_000)
 
     n = int.from_bytes(uc.mem_read(syms["MO_CONSOLE_LEN"], 4), "little")
     console = bytes(uc.mem_read(syms["MO_CONSOLE"], n)).decode(errors="replace")

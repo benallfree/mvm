@@ -7,14 +7,26 @@ name = "interp"
 version = "0.1.0"
 
 [[package]]
+name = "mvm-abi"
+version = "0.1.0"
+
+[[package]]
 name = "mvm-kernel"
 version = "0.1.0"
 dependencies = [
  "interp",
+ "mvm-abi",
 ]
 
 [[package]]
 name = "mvm-meshops-fw-unicorn"
+version = "0.1.0"
+dependencies = [
+ "mvm-meshops-tests",
+]
+
+[[package]]
+name = "mvm-meshops-host"
 version = "0.1.0"
 dependencies = [
  "mvm-meshops-tests",

@@ -71,7 +71,12 @@ def main():
         os.remove(tmp + ext)
     open(os.path.join(OUT, "applets.bin"), "wb").write(blob)
     rs.append(f"pub const BLOB_LEN: usize = {len(blob)};")
-    rs.append('pub static BLOB: [u8; BLOB_LEN] = *include_bytes!("applets.bin");')
+    # 16-byte aligned: include_bytes! alone gives align 1, so where the blob
+    # lands (and the alignment of the guest data that native ops memcpy) would
+    # depend on unrelated firmware layout, and so would the measured costs.
+    rs.append("#[repr(C, align(16))]")
+    rs.append("pub struct Blob(pub [u8; BLOB_LEN]);")
+    rs.append('pub static BLOB: Blob = Blob(*include_bytes!("applets.bin"));')
     open(os.path.join(OUT, "applets.rs"), "w").write("\n".join(rs) + "\n")
     print(f"blob: {len(blob)} bytes at {BLOB_BASE:#x}")
 

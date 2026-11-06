@@ -7,6 +7,7 @@ edition = "2021"
 # ecall dispatcher. no_std, no allocator, no target-specific code.
 [dependencies]
 interp = { path = "../../bench/interp" }
+mvm-abi = { path = "../../abi" }
 
 [features]
 count = ["interp/count"]

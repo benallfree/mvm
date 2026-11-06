@@ -6,6 +6,9 @@ Callers can't tell which.
 
 - **Code:** `meshops/kernel` (registry, loader, dispatcher), `guest/applets` (test applets),
   `meshops/tests` (the shared test runner).
+- **The contract** (FNV-1a 64, the call registers, the manifest table layouts) lives in
+  one crate, `abi/` (`mvm-abi`), which both the guest and the kernel build against.
+  The guest checks its table structs against those layouts at compile time.
 - **Results:** [meshops/RESULTS.md](meshops/RESULTS.md).
 
 ## Call ABI
@@ -176,6 +179,15 @@ replaces the entry in place. So when A2 registers `test.echo.v1`:
   fields: hash *and full name* for each, with export → entry address. A loader can then resolve before
   fetching code, and a store can check that a set of applets is complete without
   running them.
+- **Alignment of the code blob:** the firmware embeds the blob 16-byte aligned. With
+  `include_bytes!` alone (align 1), where the blob landed depended on unrelated code,
+  and so did the host alignment of guest data that native ops `memcpy`.
+  - **What it changed:** the muted 16-byte `uart.write` measured about 550 or about
+    670 cycles depending on layout.
+  - **Now:** it's deterministic at about 670, because the test string's guest address
+    is 2 mod 4, so `memcpy` takes its byte path.
+  - **Lesson:** guest data alignment is visible to native ops. A real kernel op that
+    copies bulk guest data should expect unaligned sources.
 - **Build:** `meshops/build_applets.py` links each applet separately, so shared
   code (`memcpy`, `core` panics) is duplicated per applet. Sharing it is next
   round's chunk-store work.

@@ -5,3 +5,6 @@ edition = "2021"
 
 # Round seven: test applets for mesh ops. One crate, several applets: each
 # applet is linked into its own image from its own entry symbols.
+
+[dependencies]
+mvm-abi = { path = "../../abi" }

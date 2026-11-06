@@ -21,14 +21,36 @@ TAG="$PKG-$CODE_MODEL"
 if [ "${BUILD_STD:-0}" = 1 ]; then STD=(-Zbuild-std=core); TAG="$TAG-std"; fi
 export RUSTFLAGS="-C target-feature=-relax -C codegen-units=1 -Z function-sections=yes -C code-model=${CODE_MODEL}"
 export CARGO_TARGET_DIR="target/$TAG-lto$LTO"
-D="$PWD/$CARGO_TARGET_DIR/riscv32imc-unknown-none-elf/release"
+# Inputs come from cargo's own artifact list, not from globbing the target
+# dir: a crate whose build hash changed leaves its old outputs behind, and a
+# glob would pick up both.
+artifacts() {
+  python3 -c '
+import json, os, sys
+pkg, want = sys.argv[1], sys.argv[2]
+own, deps = [], []  # the package first, as before: the chunker breaks ties by input order
+for line in sys.stdin:
+    m = json.loads(line)
+    if m.get("reason") != "compiler-artifact":
+        continue
+    name = m["target"]["name"]
+    for f in m["filenames"]:
+        if want == "obj" and f.endswith(".rlib"):
+            if name == pkg.replace("-", "_"):
+                # --emit=obj puts the object beside the rlib, same hash.
+                d, b = os.path.split(f)
+                own.append(os.path.join(d, b[3:-5] + ".o"))
+            else:
+                deps.append(f)
+        elif want == "staticlib" and f.endswith(".a"):
+            own.append(f)
+print("\n".join(own + deps))
+' "$PKG" "$1"
+}
 if [ "$LTO" = off ]; then
   RUSTFLAGS="$RUSTFLAGS -C lto=off" cargo rustc -q "${STD[@]}" -p "$PKG" --lib --crate-type rlib --release \
-    --target riscv32imc-unknown-none-elf -- --emit=obj
-  find "$D" -name "$PKG-*.o"
-  find "$D" -name '*.rlib' ! -name "lib$PKG-*"
+    --target riscv32imc-unknown-none-elf --message-format=json -- --emit=obj | artifacts obj
 else
   CARGO_PROFILE_RELEASE_LTO="$LTO" cargo rustc -q "${STD[@]}" -p "$PKG" --lib --crate-type staticlib --release \
-    --target riscv32imc-unknown-none-elf
-  find "$D" -maxdepth 1 -name "lib$PKG.a"
+    --target riscv32imc-unknown-none-elf --message-format=json | artifacts staticlib
 fi

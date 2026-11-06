@@ -1,0 +1,8 @@
+[package]
+name = "mvm-abi"
+version = "0.1.0"
+edition = "2021"
+
+# The guest/kernel contract, in one place: name hashing, the mesh-op call
+# ABI, and the manifest table layouts. no_std, no dependencies; used by
+# guest code (RV32) and by the kernel (any target).

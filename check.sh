@@ -25,8 +25,12 @@ rawhelper() { echo "$1" | tr ' ' '\n' | grep libhelper | xargs llvm-nm 2>/dev/nu
 set_version() { sed -i "s/^version = \".*\"/version = \"$1\"/" "$HTOML"; }
 
 # A second checkout of the guest sources at a different path.
-OTHER="$OUT/elsewhere/checkout-two"
-mkdir -p "$OTHER" && (cd "$G" && tar cf - --exclude=./target .) | (cd "$OTHER" && tar xf -)
+# It mirrors the repo layout (guest/ next to abi/) because guest crates use ../abi.
+OTHER="$OUT/elsewhere/checkout-two/guest"
+for d in guest abi; do
+  mkdir -p "$OUT/elsewhere/checkout-two/$d"
+  (cd "$ROOT/$d" && tar cf - --exclude=./target .) | (cd "$OUT/elsewhere/checkout-two/$d" && tar xf -)
+done
 
 for m in small medium; do
   echo "== testcrate, code model: $m"

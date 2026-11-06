@@ -14,29 +14,8 @@
 use interp::fast::{self, Cpu, Stop};
 use interp::{Fault, Mem};
 
-/// FNV-1a 64 over the full versioned name, e.g. `kernel.uart.write.v1`.
-pub const fn fnv1a64(s: &str) -> u64 {
-    fnv1a64_bytes(s.as_bytes())
-}
-
-pub const fn fnv1a64_bytes(b: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut i = 0;
-    while i < b.len() {
-        h ^= b[i] as u64;
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        i += 1;
-    }
-    h
-}
-
-pub const UART_WRITE: u64 = fnv1a64("kernel.uart.write.v1");
-pub const TIMER_NOW: u64 = fnv1a64("kernel.timer.now.v1");
-pub const NOP: u64 = fnv1a64("kernel.nop.v1");
-
-/// Guest-visible register numbers of the call ABI.
-pub const REG_SLOT: usize = 17; // a7
-pub const REG_ARG0: usize = 10; // a0..a5
+use mvm_abi::{call, manifest, names};
+pub use mvm_abi::{fnv1a64, fnv1a64_bytes, KERNEL_NAMESPACE};
 
 pub const MAX_ENTRIES: usize = 32;
 const BUCKETS: usize = 64; // power of two, >= 2 x MAX_ENTRIES
@@ -46,8 +25,6 @@ pub const MAX_SLOTS: usize = 16;
 pub const MAX_DEPTH: usize = 8;
 /// Guest stack per nesting level, carved from the top of guest RAM.
 pub const STACK_PER_LEVEL: u32 = 2048;
-/// Only the kernel may register names in this namespace.
-pub const KERNEL_NAMESPACE: &[u8] = b"kernel.";
 
 /// What a native op gets: its arguments and access to the kernel (guest memory, console).
 pub type NativeFn = fn(&mut Kernel, [u32; 6]) -> Result<[u32; 2], Error>;
@@ -327,9 +304,9 @@ impl<'a> Kernel<'a> {
             steps: 0,
         };
         let ops: [(&'static str, NativeFn); 3] = [
-            ("kernel.uart.write.v1", op_uart_write),
-            ("kernel.timer.now.v1", op_timer_now),
-            ("kernel.nop.v1", op_nop),
+            (names::UART_WRITE, op_uart_write),
+            (names::TIMER_NOW, op_timer_now),
+            (names::NOP, op_nop),
         ];
         for (name, f) in ops {
             k.registry.register(
@@ -340,6 +317,17 @@ impl<'a> Kernel<'a> {
             )?;
         }
         Ok(k)
+    }
+
+    /// The interpreter's view of guest memory, plus the decode table.
+    fn guest(&mut self) -> (Mem<'_>, &mut [fast::E]) {
+        let mem = Mem {
+            image: self.blob,
+            image_base: self.blob_base,
+            ram: &mut *self.ram,
+            ram_base: self.ram_base,
+        };
+        (mem, &mut *self.table)
     }
 
     fn blob_off(&self, addr: u32) -> usize {
@@ -368,27 +356,28 @@ impl<'a> Kernel<'a> {
             .ok_or(Error::BadPointer(addr))
     }
 
-    /// Import `i`: (hash, name). 16-byte entries `{hash: u64, name: u32, len: u32}`.
-    fn import(&self, t: &Tables, i: u32) -> Result<(u64, &'a [u8]), Error> {
-        let o = t.io + 8 + 16 * i as usize;
-        let h = rd64(self.blob, o).ok_or(Error::BadPointer(o as u32))?;
-        let (p, l) = (
-            rd32(self.blob, o + 8).unwrap_or(0),
-            rd32(self.blob, o + 12).unwrap_or(0),
-        );
-        Ok((h, self.blob_str(p, l)?))
+    /// A u32/u64 field of a manifest table entry at blob offset `o`.
+    fn field32(&self, o: usize) -> Result<u32, Error> {
+        rd32(self.blob, o).ok_or(Error::BadPointer(self.blob_base.wrapping_add(o as u32)))
+    }
+    fn field64(&self, o: usize) -> Result<u64, Error> {
+        rd64(self.blob, o).ok_or(Error::BadPointer(self.blob_base.wrapping_add(o as u32)))
     }
 
-    /// Export `j`: (hash, function, name). 24-byte entries `{hash, func, name, len, _}`.
+    /// Import `i`: (hash, name). Layout: `mvm_abi::manifest::import`.
+    fn import(&self, t: &Tables, i: u32) -> Result<(u64, &'a [u8]), Error> {
+        use manifest::import as f;
+        let o = t.io + manifest::HEADER_SIZE + f::SIZE * i as usize;
+        let name = self.blob_str(self.field32(o + f::NAME)?, self.field32(o + f::LEN)?)?;
+        Ok((self.field64(o + f::HASH)?, name))
+    }
+
+    /// Export `j`: (hash, function, name). Layout: `mvm_abi::manifest::export`.
     fn export(&self, t: &Tables, j: u32) -> Result<(u64, u32, &'a [u8]), Error> {
-        let o = t.eo + 8 + 24 * j as usize;
-        let h = rd64(self.blob, o).ok_or(Error::BadPointer(o as u32))?;
-        let f = rd32(self.blob, o + 8).ok_or(Error::BadPointer(o as u32))?;
-        let (p, l) = (
-            rd32(self.blob, o + 12).unwrap_or(0),
-            rd32(self.blob, o + 16).unwrap_or(0),
-        );
-        Ok((h, f, self.blob_str(p, l)?))
+        use manifest::export as f;
+        let o = t.eo + manifest::HEADER_SIZE + f::SIZE * j as usize;
+        let name = self.blob_str(self.field32(o + f::NAME)?, self.field32(o + f::LEN)?)?;
+        Ok((self.field64(o + f::HASH)?, self.field32(o + f::FUNC)?, name))
     }
 
     /// Load applet `id` from its tables in the blob (`count: u32, _: u32`, then entries).
@@ -502,23 +491,13 @@ impl<'a> Kernel<'a> {
         let sp = top.wrapping_sub(depth as u32 * STACK_PER_LEVEL);
         let mut cpu = Cpu::new();
         {
-            let mem = Mem {
-                image: self.blob,
-                image_base: self.blob_base,
-                ram: self.ram,
-                ram_base: self.ram_base,
-            };
-            cpu.start(&mem, self.table.len(), entry, args, sp)?;
+            let (mem, table) = self.guest();
+            cpu.start(&mem, table.len(), entry, args, sp)?;
         }
         loop {
             let stop = {
-                let mut mem = Mem {
-                    image: self.blob,
-                    image_base: self.blob_base,
-                    ram: self.ram,
-                    ram_base: self.ram_base,
-                };
-                cpu.run(&mut mem, self.table)?
+                let (mut mem, table) = self.guest();
+                cpu.run(&mut mem, table)?
             };
             match stop {
                 Stop::Returned(v) => {
@@ -529,16 +508,16 @@ impl<'a> Kernel<'a> {
                     return Ok(v);
                 }
                 Stop::Ecall => {
-                    let slot = cpu.x[REG_SLOT];
+                    let slot = cpu.x[call::REG_SLOT];
                     if slot >= slots.nslots as u32 {
                         return Err(Error::BadSlot(slot));
                     }
                     let idx = slots.slots[slot as usize];
                     let mut a = [0u32; 6];
-                    a.copy_from_slice(&cpu.x[REG_ARG0..REG_ARG0 + 6]);
+                    a.copy_from_slice(&cpu.x[call::REG_ARG0..call::REG_ARG0 + call::NUM_ARGS]);
                     let r = self.dispatch(idx, a, depth)?;
-                    cpu.x[10] = r[0];
-                    cpu.x[11] = r[1];
+                    cpu.x[call::REG_RET0] = r[0];
+                    cpu.x[call::REG_RET1] = r[1];
                 }
             }
         }

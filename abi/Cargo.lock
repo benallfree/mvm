@@ -3,12 +3,5 @@
 version = 4
 
 [[package]]
-name = "interp"
+name = "mvm-abi"
 version = "0.1.0"
-
-[[package]]
-name = "mvm-kernel"
-version = "0.1.0"
-dependencies = [
- "interp",
-]

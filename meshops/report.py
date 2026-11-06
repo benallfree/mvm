@@ -94,7 +94,7 @@ def main():
           f"{targets[0][4].get('entry_bytes')} B on x86-64.",
           f"- Whole registry (32 entries + 64-bucket index): **{u.get('registry_bytes')} B** on Thumb.",
           f"- Per-applet slot table: **{u.get('applet_bytes')} B** (16 slots × 2 B entry index + count).",
-          f"- Loading H, A and B (11 imports, 3 exports): "
+          "- Loading H, A and B (11 imports, 3 exports): "
           + ", ".join(f"{t[0]} {c[2]:.0f} per applet" for t, c in zip(targets, calc)) + ".",
           f"- Host stack per nesting level: {HOST_STACK_PER_LEVEL} B on Thumb (`run_guest` + `dispatch` frames); "
           f"guest stack per level: 2048 B of guest RAM. Deepest host stack in the whole Unicorn run "

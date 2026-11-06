@@ -13,10 +13,3 @@ bench = false
 
 [dependencies]
 mvm-meshops-tests = { path = "../tests" }
-
-[profile.release]
-opt-level = 3
-codegen-units = 1
-lto = "off"
-panic = "abort"
-debug = "line-tables-only"

@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["kernel", "tests", "host", "fw-unicorn"]
+
+# One profile for every target: the Thumb image the Unicorn harness runs and
+# the x86 host runner. Line tables only (they don't change codegen).
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "off"
+panic = "abort"
+debug = "line-tables-only"

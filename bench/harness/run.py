@@ -21,43 +21,17 @@ import re
 import subprocess
 import sys
 
-from elftools.elf.elffile import ELFFile
-from unicorn import UC_ARCH_ARM, UC_HOOK_CODE, UC_MODE_MCLASS, UC_MODE_THUMB, Uc
-from unicorn.arm_const import (UC_ARM_REG_CPSR, UC_ARM_REG_LR, UC_ARM_REG_R0, UC_ARM_REG_R1,
-                                UC_ARM_REG_R2, UC_ARM_REG_R3, UC_ARM_REG_SP)
+from unicorn import UC_HOOK_CODE
 
 import m4_cost
+import thumb
+from thumb import RET, load_elf
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INTERP_SRC = os.path.normpath(os.path.join(HERE, "..", "interp", "src"))
-RET = 0x1000_0000  # return address: execution stops here
 AOT_AT = 0x000C_4000  # where the translated blob runs from (any 4-aligned flash address)
 AOT_CATS = ["stub", "op", "spill", "const", "flags", "shiftmask", "addr"]
 PHASES = ["setup", "loop", "fetch", "decode", "dispatch", "execute", "wrapper"]
-
-
-def load_elf(path):
-    with open(path, "rb") as f:
-        elf = ELFFile(f)
-        segs = [(s["p_vaddr"], s.data(), s["p_memsz"]) for s in elf.iter_segments() if s["p_type"] == "PT_LOAD"]
-        syms = {}
-        funcs = []
-        for s in elf.get_section_by_name(".symtab").iter_symbols():
-            if s["st_info"]["type"] == "STT_OBJECT":
-                syms[s.name] = s["st_value"]
-            if s["st_info"]["type"] == "STT_FUNC" and s["st_size"]:
-                a = s["st_value"] & ~1
-                syms[s.name] = a
-                funcs.append((a, s["st_size"], s.name))
-        code = {}
-        for a, size, _ in funcs:
-            sec = next(sec for sec in elf.iter_sections() if sec["sh_addr"] <= a < sec["sh_addr"] + sec["sh_size"])
-            off = a - sec["sh_addr"]
-            data = sec.data()[off:off + size]
-            # Decode each function from its start so capstone tracks IT blocks.
-            for ci in m4_cost.MD.disasm(data, a):
-                code[ci.address] = m4_cost.Insn(ci)
-    return segs, syms, sorted(funcs), code
 
 
 def phase_markers():
@@ -123,22 +97,13 @@ class Machine:
     def __init__(self, elf):
         self.elf = elf
         segs, self.syms, self.funcs, self.code = load_elf(elf)
-        self.uc = Uc(UC_ARCH_ARM, UC_MODE_THUMB | UC_MODE_MCLASS)
-        self.uc.mem_map(0x0, 0x10_0000)  # flash
-        self.uc.mem_map(0x2000_0000, 0x4_0000)  # RAM
-        self.uc.mem_map(RET, 0x1000)
-        for vaddr, data, memsz in segs:
-            self.uc.mem_write(vaddr, data + b"\0" * (memsz - len(data)))
+        self.uc = thumb.new_unicorn(segs)
         self.trace = []
         self.uc.hook_add(UC_HOOK_CODE, self._hook)
         self._starts = [f[0] for f in self.funcs]
 
     def _hook(self, uc, addr, size, _):
-        i = self.code.get(addr)
-        ok = True
-        if i is not None and i.conditional and i.cls not in ("bcc", "cb"):
-            ok = m4_cost.cond_passes(i.cc, uc.reg_read(UC_ARM_REG_CPSR))
-        self.trace.append((addr, ok))
+        self.trace.append((addr, thumb.executed(self.code.get(addr), uc)))
 
     def func_of(self, addr):
         k = bisect.bisect_right(self._starts, addr) - 1
@@ -147,13 +112,7 @@ class Machine:
 
     def call(self, name, args=()):
         self.trace = []
-        uc = self.uc
-        uc.reg_write(UC_ARM_REG_SP, 0x2004_0000)
-        uc.reg_write(UC_ARM_REG_LR, RET | 1)
-        for r, v in zip((UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3), args):
-            uc.reg_write(r, v)
-        uc.emu_start(self.syms[name] | 1, RET, count=50_000_000)
-        return uc.reg_read(UC_ARM_REG_R0), self.trace
+        return thumb.call(self.uc, self.syms[name], args), self.trace
 
     def load_aot(self, path, syms_path, at):
         """Place translated code at `at` (any 4-aligned flash address) and decode it."""

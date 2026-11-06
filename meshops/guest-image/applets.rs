@@ -60,4 +60,6 @@ pub mod s3 {
     pub const EXPORTS: Option<u32> = None;
 }
 pub const BLOB_LEN: usize = 6436;
-pub static BLOB: [u8; BLOB_LEN] = *include_bytes!("applets.bin");
+#[repr(C, align(16))]
+pub struct Blob(pub [u8; BLOB_LEN]);
+pub static BLOB: Blob = Blob(*include_bytes!("applets.bin"));

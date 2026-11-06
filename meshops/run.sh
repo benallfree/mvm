@@ -9,11 +9,11 @@ mkdir -p out
 echo "== link the test applets"
 python3 build_applets.py
 echo "== x86 host"
-(cd host && cargo run -q --release) > out/host.txt
+cargo run -q --release -p mvm-meshops-host > out/host.txt
 grep '^MO host .*pass=' out/host.txt
 echo "== Unicorn (Thumb + M4 cost table)"
-(cd fw-unicorn && cargo build -q --release --target thumbv7em-none-eabihf)
-python3 run_unicorn.py fw-unicorn/target/thumbv7em-none-eabihf/release/fw out/unicorn.json > out/unicorn.txt
+cargo build -q --release -p mvm-meshops-fw-unicorn --target thumbv7em-none-eabihf
+python3 run_unicorn.py target/thumbv7em-none-eabihf/release/fw out/unicorn.json > out/unicorn.txt
 grep '^MO unicorn .*pass=' out/unicorn.txt
 echo "== report"
 python3 report.py > /dev/null && echo "wrote meshops/RESULTS.md" || { echo "FAILURES (see meshops/RESULTS.md)"; exit 1; }
