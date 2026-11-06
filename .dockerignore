@@ -1,0 +1,5 @@
+# The image only needs the Docker files and the tool setup script;
+# the repo itself is mounted at run time.
+*
+!docker/
+!emu/setup-tools.sh

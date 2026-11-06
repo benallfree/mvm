@@ -21,6 +21,34 @@ interpreter at 39x (crc16) and 26x (parse), down from 77x and 51x pre-decoded.
 nRF52840 (Renode, Embassy) and an emulated ESP32-S3 (Espressif QEMU, esp-hal).
 `emu/run.sh` runs both, and all 10 checks match native. See `emu/RESULTS.md`.
 
+## Running it: Docker (stable environment, in or out of the cloud)
+
+```sh
+docker/build.sh        # builds the `mvm-env` image (toolchains + emulators, ~3.6 GB)
+docker/run.sh          # runs docker/run-all.sh: check.sh, bench/run.sh, emu/run.sh
+docker/run.sh emu/run.sh   # or any one command, with the repo mounted at /work
+```
+
+**What the image holds:**
+- **Base:** Ubuntu 24.04, pinned by digest.
+- **Rust:** 1.97.0 (host tools, Thumb firmware) and nightly-2026-11-04 with
+  `rust-src` (the RV32IMC guest). The same pins are in every `rust-toolchain.toml`.
+- **Python:** unicorn 2.1.4, capstone 5.0.9, pyelftools 0.33.
+- **Emulators and Xtensa tools,** from `emu/setup-tools.sh` (the same script works
+  without Docker):
+  - Renode 1.17.0+20261105git85a5639da;
+  - Espressif QEMU 9.2.2-20260417;
+  - Xtensa GCC 14.2.0_20241119;
+  - Xtensa Rust 1.97.0.0, linked as `esp197`;
+  - espflash 4.7.0.
+
+**Behind a TLS-intercepting proxy** (a Claude Code cloud session, for example), build
+with `MVM_EXTRA_CA=/root/.ccr/ca-bundle.crt docker/build.sh`. Both scripts pass any
+`HTTPS_PROXY`/`NO_PROXY` settings through and use host networking when a proxy is set.
+
+**Network at run time:** crates are still fetched from crates.io. The image holds
+toolchains, not the dependency cache.
+
 ## Layout
 
 | Path | What |
@@ -29,6 +57,7 @@ nRF52840 (Renode, Embassy) and an emulated ESP32-S3 (Espressif QEMU, esp-hal).
 | `guest/build.sh` | The builder. It pins the flags, emits `.o`, and prints the chunker inputs. Env: `PKG`, `CODE_MODEL=small\|medium`, `BUILD_STD=1`, and `LTO=fat` (measurement only). |
 | `chunker/` | The host tool. Commands: `dump`, `hashes`, `roundtrip`, `applet-roundtrip`, `names`, `manifest`, `compare`, `link` (writes a flat image and entry addresses to disk) |
 | `guest/kernels` | Speed-spike workloads: `crc16` and `parse` |
+| `docker/` | `Dockerfile`, `build.sh`, `run.sh`, `run-all.sh`: the pinned environment |
 | `emu/` | Round six: `bench-core` (shared firmware body), `nrf52840` (Embassy, Renode), `esp32s3` (esp-hal, QEMU), `setup-tools.sh`, `run.sh` |
 | `bench/` | Speed spike: `interp` (no_std simple and pre-decoded RV32IMC interpreters), `aot` (RV32IMC → Thumb-2 translator), `fw` (Thumb firmware for Unicorn), `harness/` (Unicorn and the M4 cost model), `run.sh` |
 | `check.sh` | Every check, for both code models, plus the applet |

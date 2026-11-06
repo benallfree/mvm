@@ -3,7 +3,7 @@
 # (default ~/emu-tools). Idempotent: skips anything already there.
 #
 # Pinned versions and why:
-# - Renode: the nightly portable build from builds.renode.io (1.17.0 when written).
+# - Renode 1.17.0+20261105git85a5639da: the nightly portable build this was tested with.
 # - Espressif QEMU 9.2.2-20260417, from Espressif's mirror of the GitHub releases.
 # - Xtensa Rust 1.97.0.0 (esp-rs/rust-build). 1.99.0.0 fails to link esp-hal:
 #   its assembler puts esp-hal's `.literal` entries for __pre_init in `.literal`
@@ -15,7 +15,7 @@ mkdir -p "$T" && cd "$T"
 get() { [ -f "$2" ] || { echo "fetching $2"; curl -fsSL --retry 3 -o "$2.part" "$1" && mv "$2.part" "$2"; }; }
 
 if ! ls -d renode_*/renode >/dev/null 2>&1; then
-  get https://builds.renode.io/renode-latest.linux-portable.tar.gz renode.tar.gz
+  get "https://builds.renode.io/renode-1.17.0+20261105git85a5639da.linux-portable.tar.gz" renode.tar.gz
   tar xzf renode.tar.gz
 fi
 if [ ! -x qemu/bin/qemu-system-xtensa ]; then
@@ -36,8 +36,7 @@ if ! rustup toolchain list | grep -q '^esp197'; then
   ./xt197/rust-src-nightly/install.sh --prefix="$T/esp-rust-197" >/dev/null
   rustup toolchain link esp197 "$T/esp-rust-197"
 fi
-command -v espflash >/dev/null || cargo install --locked espflash
+command -v espflash >/dev/null || cargo install --locked espflash@4.7.0
 # QEMU needs libslirp at run time.
 ldconfig -p | grep -q libslirp.so.0 || { apt-get install -y -q libslirp0 || sudo apt-get install -y -q libslirp0; }
-rustup target list --installed | grep -q thumbv7em-none-eabihf || rustup target add thumbv7em-none-eabihf
 echo "tools ready in $T"

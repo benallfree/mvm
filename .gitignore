@@ -2,3 +2,4 @@ target/
 target-check/
 __pycache__/
 emu/out/
+docker/extra-ca/*.crt
